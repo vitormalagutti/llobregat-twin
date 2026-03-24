@@ -86,7 +86,7 @@ class RateLimiter:
 
 # ── Shared HTTP client factory ─────────────────────────────────────────────────
 
-def make_client(timeout: float = 30.0) -> httpx.Client:
+def make_client(timeout: float = 60.0) -> httpx.Client:
     """Return a configured httpx.Client with sensible defaults."""
     return httpx.Client(
         timeout=timeout,

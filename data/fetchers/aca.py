@@ -167,38 +167,44 @@ def _parse_sentilo_observations(data: dict) -> list[dict]:
       Format A (nested): {"sensors": [{"sensor": "...", "observations": [...]}]}
       Format B (flat):   {"observations": [...]}
 
-    Each observation: {"value": "5.2", "time": "01/03/2025T10:00:00"}
+    Each observation contains:
+        "timestamp" — string "DD/MM/YYYYTHH:MM:SS" (Madrid local time)  ← preferred
+        "time"      — Unix epoch milliseconds (int)                       ← fallback
+        "value"     — numeric string e.g. "9.243"
     """
+    def _parse_one(obs: dict) -> Optional[dict]:
+        # ACA Sentilo uses "timestamp" (string) as primary key; "time" is epoch ms
+        ts_raw = obs.get("timestamp") or obs.get("time")
+        val_raw = obs.get("value")
+        if ts_raw is None:
+            return None
+        try:
+            if isinstance(ts_raw, (int, float)):
+                # Epoch milliseconds → UTC Timestamp
+                ts = pd.Timestamp(int(ts_raw), unit="ms", tz="UTC")
+            else:
+                ts = _from_sentilo_ts(str(ts_raw))
+            val = float(val_raw) if val_raw not in (None, "", "null") else np.nan
+        except (ValueError, TypeError):
+            logger.debug(f"Could not parse obs: ts={ts_raw!r} value={val_raw!r}")
+            return None
+        return {"timestamp": ts, "value": val}
+
     rows = []
 
     # Format A: nested under sensors list
     for sensor_block in data.get("sensors", []):
         for obs in sensor_block.get("observations", []):
-            ts_raw = obs.get("time")
-            val_raw = obs.get("value")
-            if ts_raw is None:
-                continue
-            try:
-                ts = _from_sentilo_ts(ts_raw)
-                val = float(val_raw) if val_raw not in (None, "", "null") else np.nan
-            except (ValueError, TypeError):
-                logger.debug(f"Could not parse obs: time={ts_raw!r} value={val_raw!r}")
-                continue
-            rows.append({"timestamp": ts, "value": val})
+            row = _parse_one(obs)
+            if row:
+                rows.append(row)
 
-    # Format B: flat observations list
+    # Format B: flat observations list (actual ACA response format)
     if not rows:
         for obs in data.get("observations", []):
-            ts_raw = obs.get("time")
-            val_raw = obs.get("value")
-            if ts_raw is None:
-                continue
-            try:
-                ts = _from_sentilo_ts(ts_raw)
-                val = float(val_raw) if val_raw not in (None, "", "null") else np.nan
-            except (ValueError, TypeError):
-                continue
-            rows.append({"timestamp": ts, "value": val})
+            row = _parse_one(obs)
+            if row:
+                rows.append(row)
 
     return rows
 

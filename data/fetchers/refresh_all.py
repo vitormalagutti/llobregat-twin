@@ -158,8 +158,34 @@ def refresh_piezo(meta: dict, aca_key: str | None) -> None:
         logger.info(f"  → Cached {len(df)} rows.")
 
 
+def _load_aemet_key_from_secrets() -> str:
+    """
+    Try to load AEMET_API_KEY from .streamlit/secrets.toml as a fallback
+    when the environment variable is not set.
+    Works for both manual runs and the GitHub Actions cron job (which uses
+    the env var injected by the Actions secret).
+    """
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ImportError:
+            return ""
+
+    secrets_path = PROJECT_ROOT / ".streamlit" / "secrets.toml"
+    if not secrets_path.exists():
+        return ""
+    try:
+        with open(secrets_path, "rb") as f:
+            secrets = tomllib.load(f)
+        return secrets.get("AEMET_API_KEY", "")
+    except Exception:
+        return ""
+
+
 def main() -> None:
-    aemet_key = os.environ.get("AEMET_API_KEY", "")
+    aemet_key = os.environ.get("AEMET_API_KEY", "") or _load_aemet_key_from_secrets()
     aca_key = os.environ.get("ACA_API_KEY", None)
 
     if not aemet_key:

@@ -106,11 +106,14 @@ def _aemet_get(
     Returns list of observation dicts, or None if no data.
     """
     _rate_limiter.wait()
+    # AEMET requires the key as a query parameter AND accepts it as a header.
+    # Sending both maximises compatibility across API versions.
+    all_params = {**(params or {}), "api_key": api_key}
     headers = {"api_key": api_key}
     url = f"{AEMET_BASE_URL}/{path.lstrip('/')}"
     logger.debug(f"AEMET step-1 GET {url}")
 
-    r1 = client.get(url, params=params, headers=headers)
+    r1 = client.get(url, params=all_params, headers=headers)
     r1.raise_for_status()
     meta = r1.json()
 
@@ -129,7 +132,8 @@ def _aemet_get(
 
     _rate_limiter.wait()
     logger.debug(f"AEMET step-2 GET {datos_url}")
-    r2 = client.get(datos_url, headers=headers)
+    # Step-2 URL is a pre-signed CDN URL — no auth header needed, but longer timeout
+    r2 = client.get(datos_url, timeout=60.0)
     r2.raise_for_status()
     return r2.json()
 
