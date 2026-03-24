@@ -1,0 +1,37 @@
+# Alert thresholds — Llobregat Watershed Monitoring Dashboard
+# All values are PROVISIONAL. Calibrate against historical data before production use.
+# Units: flow in m3/s, reservoir in %, piezometric in m a.s.l.
+#
+# To add a station-specific threshold, add a key under the relevant section
+# using the ACA station code as the key.
+
+# ── River flow thresholds (m3/s) ──────────────────────────────────────────────
+flow_alert_m3s:
+  # Global defaults (applied to any station without a specific entry)
+  defaults:
+    low_flow_warning: 1.0      # Below this: drought concern
+    flood_watch: 100.0         # Above this: flood watch
+    flood_warning: 300.0       # Above this: flood warning (HIGH URGENCY)
+
+  # Station-specific overrides (ACA station codes)
+  # stations:
+  #   E003:  # Martorell
+  #     low_flow_warning: 2.0
+  #     flood_watch: 120.0
+  #     flood_warning: 350.0
+
+# ── Reservoir thresholds (% of total capacity) ────────────────────────────────
+reservoir_alert_pct:
+  critically_low: 20   # Below 20%: critical alert
+  low: 40              # Below 40%: watch
+
+# ── Piezometric thresholds (m a.s.l.) ─────────────────────────────────────────
+# These MUST be calibrated per station. Leave null until station baselines are known.
+piezo_alert_m:
+  critically_low: null
+  critically_high: null
+  # Per-station calibration (to be populated after historical data review)
+  # stations:
+  #   PIE001:
+  #     critically_low: 2.5
+  #     critically_high: 8.0

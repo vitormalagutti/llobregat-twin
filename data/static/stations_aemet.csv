@@ -1,0 +1,5 @@
+station_id,station_name,sub_basin,lat,lon,elevation_m,priority,notes
+0076,Berga,upper_llobregat,42.1000,1.8500,715,1,PLACEHOLDER — verify AEMET idema
+0149X,Manresa,middle_llobregat,41.7280,1.8240,241,1,PLACEHOLDER — verify AEMET idema
+0200E,Martorell,lower_llobregat,41.4700,1.9300,56,1,PLACEHOLDER — verify AEMET idema
+0229I,Molins de Rei,lower_llobregat,41.4100,2.0200,35,2,PLACEHOLDER — verify AEMET idema

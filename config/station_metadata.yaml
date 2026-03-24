@@ -1,0 +1,107 @@
+# Station metadata — Llobregat Watershed Monitoring Dashboard
+# Human-readable names, coordinates, and sub-basin membership.
+# This file is the authoritative source for display names in the UI.
+# Do NOT edit lat/lon here without also updating data/static/stations_aca.csv.
+
+# ── ACA gauge stations (river flow) ───────────────────────────────────────────
+# Priority stations are listed first; add others as the catalogue is explored.
+gauge_stations:
+  - id: "E003"
+    name: "Llobregat at Martorell"
+    river: "Llobregat"
+    sub_basin: "lower_llobregat"
+    lat: 41.4739
+    lon: 1.9286
+    priority: 1
+    notes: "Key downstream reference point, pre-delta. ~17 m3/s mean annual."
+
+  - id: "E010"
+    name: "Llobregat at Berga"
+    river: "Llobregat"
+    sub_basin: "upper_llobregat"
+    lat: 42.1006
+    lon: 1.8440
+    priority: 1
+    notes: "Upper basin, downstream of La Baells reservoir."
+
+  - id: "E020"
+    name: "Llobregat at Manresa"
+    river: "Llobregat"
+    sub_basin: "middle_llobregat"
+    lat: 41.7297
+    lon: 1.8284
+    priority: 1
+    notes: "Post-Cardener confluence. Key mid-basin reference."
+
+  - id: "E030"
+    name: "Cardener at Manresa"
+    river: "Cardener"
+    sub_basin: "cardener"
+    lat: 41.7280
+    lon: 1.8310
+    priority: 1
+    notes: "Main Cardener tributary, just before confluence with Llobregat."
+
+# NOTE: Station IDs above are PLACEHOLDERS. Verify against the ACA SDIM catalogue
+# on first run and update this file with real ACA codes.
+
+# ── ACA reservoirs ────────────────────────────────────────────────────────────
+reservoirs:
+  - id: "BAELLS"
+    name: "La Baells"
+    river: "Llobregat"
+    sub_basin: "upper_llobregat"
+    lat: 42.0167
+    lon: 1.8667
+    capacity_hm3: 109.0
+    notes: "Main upper Llobregat regulator. Berguedà comarca."
+
+  - id: "SPONC"
+    name: "Sant Ponç"
+    river: "Cardener"
+    sub_basin: "cardener"
+    lat: 41.9833
+    lon: 1.6167
+    capacity_hm3: 24.0
+    notes: "Cardener tributary regulator. Solsonès comarca."
+
+# NOTE: Reservoir IDs are PLACEHOLDERS. Verify against ACA SDIM catalogue.
+
+# ── AEMET meteorological stations ─────────────────────────────────────────────
+meteo_stations:
+  - id: "0076"
+    name: "Berga"
+    sub_basin: "upper_llobregat"
+    lat: 42.1000
+    lon: 1.8500
+    priority: 1
+
+  - id: "0149X"
+    name: "Manresa"
+    sub_basin: "middle_llobregat"
+    lat: 41.7280
+    lon: 1.8240
+    priority: 1
+
+  - id: "0200E"
+    name: "Martorell"
+    sub_basin: "lower_llobregat"
+    lat: 41.4700
+    lon: 1.9300
+    priority: 1
+
+  - id: "0229I"
+    name: "Molins de Rei"
+    sub_basin: "lower_llobregat"
+    lat: 41.4100
+    lon: 2.0200
+    priority: 2
+
+# NOTE: AEMET station idema codes above are approximate. Verify against the
+# AEMET station inventory endpoint before use.
+
+# ── ACA piezometric stations ──────────────────────────────────────────────────
+piezo_stations:
+  # To be populated after exploring the ACA piezometric network catalogue.
+  # The Baix Llobregat alluvial aquifer is the primary target.
+  []

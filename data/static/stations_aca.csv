@@ -1,0 +1,7 @@
+station_id,station_name,station_type,river,sub_basin,lat,lon,priority,notes
+E003,Llobregat at Martorell,gauge,Llobregat,lower_llobregat,41.4739,1.9286,1,PLACEHOLDER — verify ACA code
+E010,Llobregat at Berga,gauge,Llobregat,upper_llobregat,42.1006,1.8440,1,PLACEHOLDER — verify ACA code
+E020,Llobregat at Manresa,gauge,Llobregat,middle_llobregat,41.7297,1.8284,1,PLACEHOLDER — verify ACA code
+E030,Cardener at Manresa,gauge,Cardener,cardener,41.7280,1.8310,1,PLACEHOLDER — verify ACA code
+BAELLS,La Baells,reservoir,Llobregat,upper_llobregat,42.0167,1.8667,1,109 hm3 capacity
+SPONC,Sant Ponç,reservoir,Cardener,cardener,41.9833,1.6167,1,24 hm3 capacity
