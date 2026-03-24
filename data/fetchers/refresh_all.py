@@ -1,16 +1,16 @@
 """
 data/fetchers/refresh_all.py
 
-Master refresh script — fetches all data sources and writes to cache.
+Master refresh script — fetches all data sources and writes Parquet cache.
 
 Run via:
     python -m data.fetchers.refresh_all
 
-Or from GitHub Actions (see .github/workflows/refresh_data.yml).
+Or automatically via GitHub Actions every 30 minutes.
 
-Environment variables required:
-    AEMET_API_KEY  — AEMET OpenData API key
-    ACA_API_KEY    — ACA SDIM API key (optional; omit if not required)
+Environment variables:
+    AEMET_API_KEY  — AEMET OpenData API key (required for meteorology)
+    ACA_API_KEY    — ACA Sentilo IDENTITY_KEY (optional; public read doesn't need it)
 """
 import logging
 import os
@@ -19,7 +19,6 @@ from pathlib import Path
 
 import yaml
 
-# Ensure project root is on sys.path when run as __main__
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -37,51 +36,80 @@ def load_station_metadata() -> dict:
         return yaml.safe_load(f)
 
 
-def refresh_gauges(meta: dict, api_key: str | None) -> None:
-    """Fetch and cache river gauge data for all configured stations."""
+def refresh_gauges(meta: dict, aca_key: str | None) -> None:
     stations = meta.get("gauge_stations", [])
     if not stations:
         logger.warning("No gauge stations configured.")
         return
 
     for stn in stations:
-        logger.info(f"Fetching gauge: {stn['name']} ({stn['id']})")
+        # After discover_stations.py is run, config will have real 'component_id' and 'provider'
+        # Fall back to 'id' field for backward compatibility during migration
+        component_id = stn.get("component_id") or stn.get("id", "")
+        provider = stn.get("provider", "")
+        flow_sensor = stn.get("flow_sensor", "cabal")
+        level_sensor = stn.get("level_sensor", "nivell")
+
+        if not component_id or not provider:
+            logger.warning(
+                f"Gauge station '{stn.get('name', '?')}' missing component_id or provider "
+                "— skipping. Run discover_stations.py first."
+            )
+            continue
+
+        logger.info(f"Fetching gauge: {stn['name']} ({component_id})")
         df = aca.fetch_aca_gauge_data(
-            station_id=stn["id"],
+            component_id=component_id,
+            provider=provider,
             station_name=stn["name"],
-            api_key=api_key,
+            flow_sensor=flow_sensor,
+            level_sensor=level_sensor,
+            identity_key=aca_key,
         )
         if df.empty:
-            logger.warning(f"  → No data for {stn['id']} — skipping cache write.")
+            logger.warning(f"  → No data for {component_id} — skipping cache write.")
             continue
-        aca.cache_to_parquet(df, prefix="flow", entity_id=stn["id"])
+        aca.cache_to_parquet(df, prefix="flow", entity_id=component_id)
         logger.info(f"  → Cached {len(df)} rows.")
 
 
-def refresh_reservoirs(meta: dict, api_key: str | None) -> None:
-    """Fetch and cache reservoir data for all configured reservoirs."""
+def refresh_reservoirs(meta: dict, aca_key: str | None) -> None:
     reservoirs = meta.get("reservoirs", [])
     if not reservoirs:
         logger.warning("No reservoirs configured.")
         return
 
     for res in reservoirs:
-        logger.info(f"Fetching reservoir: {res['name']} ({res['id']})")
+        component_id = res.get("component_id") or res.get("id", "")
+        provider = res.get("provider", "")
+        volume_sensor = res.get("volume_sensor", "volum")
+        level_sensor = res.get("level_sensor", "cota")
+
+        if not component_id or not provider:
+            logger.warning(
+                f"Reservoir '{res.get('name', '?')}' missing component_id or provider "
+                "— skipping. Run discover_stations.py first."
+            )
+            continue
+
+        logger.info(f"Fetching reservoir: {res['name']} ({component_id})")
         df = aca.fetch_aca_reservoir_data(
-            reservoir_id=res["id"],
+            component_id=component_id,
+            provider=provider,
             reservoir_name=res["name"],
             capacity_hm3=float(res.get("capacity_hm3") or float("nan")),
-            api_key=api_key,
+            volume_sensor=volume_sensor,
+            level_sensor=level_sensor,
+            identity_key=aca_key,
         )
         if df.empty:
-            logger.warning(f"  → No data for {res['id']} — skipping cache write.")
+            logger.warning(f"  → No data for {component_id} — skipping cache write.")
             continue
-        aca.cache_to_parquet(df, prefix="reservoir", entity_id=res["id"])
+        aca.cache_to_parquet(df, prefix="reservoir", entity_id=component_id)
         logger.info(f"  → Cached {len(df)} rows.")
 
 
 def refresh_meteo(meta: dict, aemet_key: str) -> None:
-    """Fetch and cache meteorological data for all configured AEMET stations."""
     stations = meta.get("meteo_stations", [])
     if not stations:
         logger.warning("No AEMET meteo stations configured.")
@@ -101,25 +129,32 @@ def refresh_meteo(meta: dict, aemet_key: str) -> None:
         logger.info(f"  → Cached {len(df)} rows.")
 
 
-def refresh_piezo(meta: dict, api_key: str | None) -> None:
-    """Fetch and cache piezometric data (graceful: many stations return no data)."""
+def refresh_piezo(meta: dict, aca_key: str | None) -> None:
     stations = meta.get("piezo_stations") or []
     if not stations:
         logger.info("No piezometric stations configured — skipping.")
         return
 
     for stn in stations:
-        logger.info(f"Fetching piezo: {stn['name']} ({stn['id']})")
+        component_id = stn.get("component_id") or stn.get("id", "")
+        provider = stn.get("provider", "")
+
+        if not component_id or not provider:
+            logger.warning(f"Piezo station '{stn.get('name', '?')}' missing component_id/provider.")
+            continue
+
+        logger.info(f"Fetching piezo: {stn['name']} ({component_id})")
         df = aca.fetch_aca_piezo_data(
-            station_id=stn["id"],
+            component_id=component_id,
+            provider=provider,
             station_name=stn["name"],
             aquifer_unit=stn.get("aquifer_unit", "Baix Llobregat"),
-            api_key=api_key,
+            identity_key=aca_key,
         )
         if df.empty:
-            logger.info(f"  → No piezometric data for {stn['id']} (expected for some stations).")
+            logger.info(f"  → No piezometric data for {component_id} (expected for some stations).")
             continue
-        aca.cache_to_parquet(df, prefix="piezo", entity_id=stn["id"])
+        aca.cache_to_parquet(df, prefix="piezo", entity_id=component_id)
         logger.info(f"  → Cached {len(df)} rows.")
 
 
@@ -129,8 +164,7 @@ def main() -> None:
 
     if not aemet_key:
         logger.warning(
-            "AEMET_API_KEY not set. Meteorological data will not be fetched. "
-            "Set the environment variable or add to .streamlit/secrets.toml."
+            "AEMET_API_KEY not set. Meteorological data will not be fetched."
         )
 
     logger.info("=== Llobregat data refresh starting ===")
@@ -138,30 +172,23 @@ def main() -> None:
 
     errors: list[str] = []
 
-    try:
-        refresh_gauges(meta, aca_key)
-    except Exception as e:
-        logger.error(f"Gauge refresh failed: {e}", exc_info=True)
-        errors.append(f"gauges: {e}")
-
-    try:
-        refresh_reservoirs(meta, aca_key)
-    except Exception as e:
-        logger.error(f"Reservoir refresh failed: {e}", exc_info=True)
-        errors.append(f"reservoirs: {e}")
+    for label, fn, kwargs in [
+        ("gauges",     refresh_gauges,     {"meta": meta, "aca_key": aca_key}),
+        ("reservoirs", refresh_reservoirs, {"meta": meta, "aca_key": aca_key}),
+        ("piezo",      refresh_piezo,      {"meta": meta, "aca_key": aca_key}),
+    ]:
+        try:
+            fn(**kwargs)
+        except Exception as e:
+            logger.error(f"{label} refresh failed: {e}", exc_info=True)
+            errors.append(f"{label}: {e}")
 
     if aemet_key:
         try:
             refresh_meteo(meta, aemet_key)
         except Exception as e:
-            logger.error(f"Meteo refresh failed: {e}", exc_info=True)
+            logger.error(f"meteo refresh failed: {e}", exc_info=True)
             errors.append(f"meteo: {e}")
-
-    try:
-        refresh_piezo(meta, aca_key)
-    except Exception as e:
-        logger.error(f"Piezo refresh failed: {e}", exc_info=True)
-        errors.append(f"piezo: {e}")
 
     if errors:
         logger.error(f"=== Refresh completed WITH ERRORS: {errors} ===")
