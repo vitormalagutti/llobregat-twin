@@ -62,8 +62,8 @@ def refresh_gauges(meta: dict, aca_key: str | None) -> None:
             component_id=component_id,
             provider=provider,
             station_name=stn["name"],
-            flow_sensor=flow_sensor,
-            level_sensor=level_sensor,
+            flow_sensor=stn.get("flow_sensor") or None,
+            level_sensor=stn.get("level_sensor") or None,
             identity_key=aca_key,
         )
         if df.empty:
@@ -98,8 +98,8 @@ def refresh_reservoirs(meta: dict, aca_key: str | None) -> None:
             provider=provider,
             reservoir_name=res["name"],
             capacity_hm3=float(res.get("capacity_hm3") or float("nan")),
-            volume_sensor=volume_sensor,
-            level_sensor=level_sensor,
+            volume_sensor=res.get("volume_sensor") or None,
+            level_sensor=res.get("level_sensor") or None,
             identity_key=aca_key,
         )
         if df.empty:

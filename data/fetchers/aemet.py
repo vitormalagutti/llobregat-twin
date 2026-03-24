@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 CACHE_DIR = Path(__file__).parent.parent / "cache"
-AEMET_BASE_URL = "https://opendata.aemet.es/openapi/api"
+AEMET_BASE_URL = "https://opendata.aemet.es/opendata/api"
 
 # Watershed bounding box for filtering the station catalogue
 WATERSHED_BBOX = {

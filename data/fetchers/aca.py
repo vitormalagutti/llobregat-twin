@@ -159,29 +159,20 @@ def _sentilo_get(
     return r.json()
 
 
-def _parse_sentilo_observations(
-    data: dict,
-    provider: str,
-    sensor: str,
-) -> list[dict]:
+def _parse_sentilo_observations(data: dict) -> list[dict]:
     """
-    Extract observation records from a Sentilo data response.
+    Extract observation records from a Sentilo GET /data/{provider}/{sensor} response.
 
-    Sentilo response structure:
-    {
-      "sensors": [{
-        "sensor": "cabal",
-        "observations": [
-          {"value": "5.2", "time": "01/03/2025T10:00:00"},
-          ...
-        ]
-      }]
-    }
+    Sentilo may return observations in two formats:
+      Format A (nested): {"sensors": [{"sensor": "...", "observations": [...]}]}
+      Format B (flat):   {"observations": [...]}
+
+    Each observation: {"value": "5.2", "time": "01/03/2025T10:00:00"}
     """
     rows = []
+
+    # Format A: nested under sensors list
     for sensor_block in data.get("sensors", []):
-        if sensor_block.get("sensor") != sensor:
-            continue
         for obs in sensor_block.get("observations", []):
             ts_raw = obs.get("time")
             val_raw = obs.get("value")
@@ -194,6 +185,21 @@ def _parse_sentilo_observations(
                 logger.debug(f"Could not parse obs: time={ts_raw!r} value={val_raw!r}")
                 continue
             rows.append({"timestamp": ts, "value": val})
+
+    # Format B: flat observations list
+    if not rows:
+        for obs in data.get("observations", []):
+            ts_raw = obs.get("time")
+            val_raw = obs.get("value")
+            if ts_raw is None:
+                continue
+            try:
+                ts = _from_sentilo_ts(ts_raw)
+                val = float(val_raw) if val_raw not in (None, "", "null") else np.nan
+            except (ValueError, TypeError):
+                continue
+            rows.append({"timestamp": ts, "value": val})
+
     return rows
 
 
@@ -281,8 +287,8 @@ def fetch_aca_gauge_data(
     component_id: str,
     provider: str,
     station_name: str = "",
-    flow_sensor: str = "cabal",
-    level_sensor: str = "nivell",
+    flow_sensor: Optional[str] = None,
+    level_sensor: Optional[str] = None,
     start_dt: Optional[datetime] = None,
     end_dt: Optional[datetime] = None,
     identity_key: Optional[str] = None,
@@ -291,13 +297,14 @@ def fetch_aca_gauge_data(
     Fetch river gauge data (flow + stage) for one component.
 
     Args:
-        component_id:  Sentilo component ID (e.g. 'AFORAMENT-EST.12345-001')
+        component_id:  Sentilo component ID (e.g. '081445-001')
         provider:      Sentilo provider ID (e.g. 'AFORAMENT-EST')
         station_name:  Human-readable name for output DataFrame
-        flow_sensor:   Sensor name for flow (default 'cabal')
-        level_sensor:  Sensor name for stage (default 'nivell')
+        flow_sensor:   Full Sentilo sensor ID for flow, e.g. 'CALC001304'
+        level_sensor:  Full Sentilo sensor ID for stage, e.g. '081445-001-ANA002'
+                       Pass None to skip fetching that variable.
         start_dt / end_dt: UTC datetime window (default: last 7 days)
-        identity_key:  Sentilo auth token (optional)
+        identity_key:  Sentilo IDENTITY_KEY header (not required for public read)
 
     Returns DataFrame conforming to DATA_SCHEMA.md gauge flows schema.
     """
@@ -314,37 +321,34 @@ def fetch_aca_gauge_data(
     flow_rows: list[dict] = []
     level_rows: list[dict] = []
 
+    sensors_to_fetch = []
+    if flow_sensor:
+        sensors_to_fetch.append((flow_sensor, flow_rows))
+    if level_sensor:
+        sensors_to_fetch.append((level_sensor, level_rows))
+
+    if not sensors_to_fetch:
+        logger.warning(f"No sensor IDs provided for gauge {component_id} — skipping.")
+        return _empty_gauge_df()
+
     with make_client() as client:
-        for sensor_name, target in [(flow_sensor, flow_rows), (level_sensor, level_rows)]:
-            path = f"/data/{provider}/{component_id}.{sensor_name}"
+        for sensor_id, target in sensors_to_fetch:
+            # Sentilo data path: /data/{provider}/{sensorId}
+            path = f"/data/{provider}/{sensor_id}"
             try:
                 data = _sentilo_get(client, path, params=params, identity_key=identity_key)
             except httpx.HTTPStatusError as e:
                 logger.warning(
-                    f"Gauge sensor {component_id}.{sensor_name}: "
-                    f"HTTP {e.response.status_code} — skipping."
+                    f"Gauge sensor {sensor_id}: HTTP {e.response.status_code} — skipping."
                 )
                 continue
 
             if data is None:
-                logger.info(f"No data for {component_id}.{sensor_name}")
+                logger.info(f"No data for sensor {sensor_id}")
                 continue
 
-            parsed = _parse_sentilo_observations(data, provider=provider, sensor=f"{component_id}.{sensor_name}")
-            if not parsed:
-                # Try flat observations (some Sentilo versions return differently)
-                for obs in data.get("observations", []):
-                    ts_raw = obs.get("time")
-                    val_raw = obs.get("value")
-                    if ts_raw:
-                        try:
-                            ts = _from_sentilo_ts(ts_raw)
-                            val = float(val_raw) if val_raw not in (None, "", "null") else np.nan
-                            target.append({"timestamp": ts, "value": val})
-                        except (ValueError, TypeError):
-                            continue
-            else:
-                target.extend(parsed)
+            parsed = _parse_sentilo_observations(data)
+            target.extend(parsed)
 
     if not flow_rows and not level_rows:
         logger.warning(f"No gauge data for component {component_id}.")
@@ -383,14 +387,18 @@ def fetch_aca_reservoir_data(
     provider: str,
     reservoir_name: str = "",
     capacity_hm3: float = np.nan,
-    volume_sensor: str = "volum",
-    level_sensor: str = "cota",
+    volume_sensor: Optional[str] = None,
+    level_sensor: Optional[str] = None,
     start_dt: Optional[datetime] = None,
     end_dt: Optional[datetime] = None,
     identity_key: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Fetch reservoir storage data for one component.
+
+    Args:
+        volume_sensor: Full Sentilo sensor ID for volume (hm3), e.g. 'CALC000697'
+        level_sensor:  Full Sentilo sensor ID for water level, e.g. '082687-001-ANA015'
 
     Returns DataFrame conforming to DATA_SCHEMA.md reservoir schema.
     """
@@ -407,32 +415,31 @@ def fetch_aca_reservoir_data(
     vol_rows: list[dict] = []
     lev_rows: list[dict] = []
 
+    sensors_to_fetch = []
+    if volume_sensor:
+        sensors_to_fetch.append((volume_sensor, vol_rows))
+    if level_sensor:
+        sensors_to_fetch.append((level_sensor, lev_rows))
+
+    if not sensors_to_fetch:
+        logger.warning(f"No sensor IDs for reservoir {component_id} — skipping.")
+        return _empty_reservoir_df()
+
     with make_client() as client:
-        for sensor_name, target in [(volume_sensor, vol_rows), (level_sensor, lev_rows)]:
-            path = f"/data/{provider}/{component_id}.{sensor_name}"
+        for sensor_id, target in sensors_to_fetch:
+            path = f"/data/{provider}/{sensor_id}"
             try:
                 data = _sentilo_get(client, path, params=params, identity_key=identity_key)
             except httpx.HTTPStatusError as e:
                 logger.warning(
-                    f"Reservoir sensor {component_id}.{sensor_name}: "
-                    f"HTTP {e.response.status_code} — skipping."
+                    f"Reservoir sensor {sensor_id}: HTTP {e.response.status_code} — skipping."
                 )
                 continue
 
             if data is None:
                 continue
 
-            for obs in (data.get("observations") or []):
-                ts_raw = obs.get("time")
-                val_raw = obs.get("value")
-                if not ts_raw:
-                    continue
-                try:
-                    ts = _from_sentilo_ts(ts_raw)
-                    val = float(val_raw) if val_raw not in (None, "", "null") else np.nan
-                    target.append({"timestamp": ts, "value": val})
-                except (ValueError, TypeError):
-                    continue
+            target.extend(_parse_sentilo_observations(data))
 
     if not vol_rows and not lev_rows:
         logger.warning(f"No reservoir data for component {component_id}.")
