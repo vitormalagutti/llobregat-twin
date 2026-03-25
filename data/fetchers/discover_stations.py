@@ -69,8 +69,29 @@ def discover_aca_sensor_names(component_id: str, provider: str) -> list[str]:
     return []
 
 
+def _load_aemet_key() -> str:
+    key = os.environ.get("AEMET_API_KEY", "")
+    if key:
+        return key
+    try:
+        import tomllib
+    except ImportError:
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ImportError:
+            return ""
+    secrets_path = PROJECT_ROOT / ".streamlit" / "secrets.toml"
+    if secrets_path.exists():
+        try:
+            with open(secrets_path, "rb") as f:
+                return tomllib.load(f).get("AEMET_API_KEY", "")
+        except Exception:
+            pass
+    return ""
+
+
 def discover_aemet_stations() -> pd.DataFrame:
-    aemet_key = os.environ.get("AEMET_API_KEY", "")
+    aemet_key = _load_aemet_key()
     if not aemet_key:
         logger.warning("AEMET_API_KEY not set — skipping AEMET discovery.")
         return pd.DataFrame()

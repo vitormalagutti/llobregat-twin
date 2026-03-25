@@ -34,7 +34,7 @@ jobs:
         run: |
           git config user.name "llobregat-data-bot"
           git config user.email "bot@llobregat-twin.noreply"
-          git add data/cache/
+          git add -f data/cache/          # -f needed because *.parquet is in .gitignore
           # Only commit if there are actual changes
           git diff --staged --quiet || git commit -m "chore: refresh data cache $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
