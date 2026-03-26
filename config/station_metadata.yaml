@@ -88,6 +88,84 @@ gauge_stations:
     flow_sensor: "CALC001261"
     notes: "Very lower Llobregat near the delta. Good for drought and saltwater intrusion context."
 
+  - id: "080543-002"
+    component_id: "080543-002"
+    provider: "AFORAMENT-EST"
+    name: "Castellbisbal (Llobregat)"
+    river: "Llobregat"
+    sub_basin: "lower_llobregat"
+    lat: 41.484600949
+    lon: 1.933089949
+    priority: 2
+    level_sensor: "080543-002-ANA001"
+    flow_sensor: "CALC001446"
+    notes: "Lower Llobregat between Martorell and Sant Joan Despí."
+
+  - id: "082634-001"
+    component_id: "082634-001"
+    provider: "AFORAMENT-EST"
+    name: "Sant Vicenç dels Horts (Llobregat)"
+    river: "Llobregat"
+    sub_basin: "lower_llobregat"
+    lat: 41.386564791
+    lon: 2.023355995
+    priority: 2
+    level_sensor: "082634-001-ANA013"
+    flow_sensor: "CALC001363"
+    notes: "Lower Llobregat near the delta, upstream of Sant Joan Despí."
+
+  - id: "082747-007"
+    component_id: "082747-007"
+    provider: "AFORAMENT-EST"
+    name: "Súria (Cardener)"
+    river: "Cardener"
+    sub_basin: "cardener"
+    lat: 41.81351335
+    lon: 1.762733581
+    priority: 2
+    level_sensor: "082747-007-ANA001"
+    flow_sensor: "CALC001274"
+    notes: "Mid Cardener between Sant Ponç and Manresa confluence."
+
+  - id: "081141-002"
+    component_id: "081141-002"
+    provider: "AFORAMENT-EST"
+    name: "Martorell (Anoia)"
+    river: "Anoia"
+    sub_basin: "anoia"
+    lat: 41.47770205
+    lon: 1.929286623
+    priority: 2
+    level_sensor: "081141-002-ANA001"
+    flow_sensor: "CALC001836"
+    notes: "Anoia tributary at its confluence with the Llobregat."
+
+  - id: "082401-002"
+    component_id: "082401-002"
+    provider: "AFORAMENT-EST"
+    name: "Sant Sadurní d'Anoia (Anoia)"
+    river: "Anoia"
+    sub_basin: "anoia"
+    lat: 41.443497484
+    lon: 1.788187977
+    priority: 2
+    level_sensor: "082401-002-ANA001"
+    flow_sensor: "CALC001249"
+    notes: "Upper Anoia tributary. Penedès wine country."
+
+  - id: "081918-009"
+    component_id: "081918-009"
+    provider: "AFORAMENT-EST"
+    name: "Artès (riera Gavarresa)"
+    river: "Gavarresa"
+    sub_basin: "middle_llobregat"
+    lat: 41.787629375
+    lon: 1.91716489
+    priority: 3
+    level_sensor: "081918-009-ANA001"
+    flow_sensor: "CALC001237"
+    notes: "Gavarresa tributary near Manresa."
+
 # ── ACA reservoirs ────────────────────────────────────────────────────────────
 reservoirs:
 
