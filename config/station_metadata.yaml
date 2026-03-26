@@ -83,10 +83,10 @@ gauge_stations:
     sub_basin: "lower_llobregat"
     lat: 41.351810642
     lon: 2.046600124
-    priority: 2
+    priority: 1
     level_sensor: "082172-002-ANA010"
     flow_sensor: "CALC001261"
-    notes: "Very lower Llobregat near the delta. Good for drought and saltwater intrusion context."
+    notes: "Main channel reference near Barcelona. Very lower Llobregat near the delta."
 
   - id: "080543-002"
     component_id: "080543-002"
@@ -219,6 +219,7 @@ meteo_stations:
     lat: 42.1000
     lon: 1.8500
     priority: 1
+    municipio_code: "08019"
 
   - id: "0149X"
     name: "Manresa"
@@ -226,6 +227,7 @@ meteo_stations:
     lat: 41.7280
     lon: 1.8240
     priority: 1
+    municipio_code: "08113"
 
   - id: "0200E"
     name: "Martorell"
@@ -233,6 +235,7 @@ meteo_stations:
     lat: 41.4700
     lon: 1.9300
     priority: 1
+    municipio_code: "08116"
 
   - id: "0229I"
     name: "Molins de Rei"
@@ -240,6 +243,7 @@ meteo_stations:
     lat: 41.4100
     lon: 2.0200
     priority: 2
+    municipio_code: "08124"
 
 # ── ACA piezometric stations ──────────────────────────────────────────────────
 # To be populated. Run: python -m data.fetchers.discover_stations

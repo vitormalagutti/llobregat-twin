@@ -1,31 +1,180 @@
 """
 Page 5 — Aquifers (Piezometric levels)
 
-Displays piezometric levels for the Baix Llobregat alluvial aquifer.
-Data availability is patchy — all empty/missing states are handled gracefully.
-
-Data source: reads piezo_*.parquet from data/cache/ only.
+The Baix Llobregat alluvial aquifer is one of the most important
+groundwater bodies in Catalonia. ACA monitors it via a network of
+piezometric stations. Station IDs need to be discovered before data
+can be shown here.
 """
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
+import folium
+from streamlit_folium import st_folium
 from pathlib import Path
 import yaml
 import numpy as np
 
 st.set_page_config(page_title="Aquifers — Llobregat", layout="wide")
-st.title("Aquifer Piezometric Levels")
-
-st.info(
-    "**Baix Llobregat alluvial aquifer** — The lower 30 km of the Llobregat valley "
-    "hosts a major alluvial aquifer that supplies Barcelona's industrial belt. "
-    "Piezometric data availability is irregular; the dashboard degrades gracefully "
-    "when data is missing."
-)
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 
+# ── Hero ───────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div style="background:linear-gradient(135deg,#3d0066,#6a0080,#9b00b3);
+            padding:1.4rem 2rem;border-radius:12px;margin-bottom:1rem">
+  <h1 style="color:white;margin:0;font-size:1.8rem">🪨 Aquifer Monitoring</h1>
+  <p style="color:#e0b3ff;margin:0.3rem 0 0;font-size:0.9rem">
+    Baix Llobregat alluvial aquifer · Piezometric levels · Barcelona metropolitan area
+  </p>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Context cards ──────────────────────────────────────────────────────────────
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown("""
+<div style="background:#1a0026;border:2px solid #9b00b3;border-radius:10px;padding:1rem">
+  <div style="color:#e0b3ff;font-size:0.7rem;font-weight:700;text-transform:uppercase">Aquifer area</div>
+  <div style="color:white;font-size:1.4rem;font-weight:800">~30 km</div>
+  <div style="color:#aaa;font-size:0.8rem">Lower Llobregat valley length</div>
+</div>""", unsafe_allow_html=True)
+with col2:
+    st.markdown("""
+<div style="background:#1a0026;border:2px solid #9b00b3;border-radius:10px;padding:1rem">
+  <div style="color:#e0b3ff;font-size:0.7rem;font-weight:700;text-transform:uppercase">Aquifer type</div>
+  <div style="color:white;font-size:1.4rem;font-weight:800">Alluvial</div>
+  <div style="color:#aaa;font-size:0.8rem">Quaternary fluvial deposits</div>
+</div>""", unsafe_allow_html=True)
+with col3:
+    st.markdown("""
+<div style="background:#1a0026;border:2px solid #9b00b3;border-radius:10px;padding:1rem">
+  <div style="color:#e0b3ff;font-size:0.7rem;font-weight:700;text-transform:uppercase">Key risk</div>
+  <div style="color:white;font-size:1.4rem;font-weight:800">Saltwater</div>
+  <div style="color:#aaa;font-size:0.8rem">Seawater intrusion near delta</div>
+</div>""", unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── Load piezometric stations ──────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_piezo_stations() -> list:
+    p = CONFIG_DIR / "station_metadata.yaml"
+    if not p.exists():
+        return []
+    with open(p) as f:
+        return yaml.safe_load(f).get("piezo_stations") or []
+
+stations = load_piezo_stations()
+
+# ── Aquifer location map ───────────────────────────────────────────────────────
+st.subheader("Baix Llobregat Aquifer — Location")
+
+m = folium.Map(location=[41.35, 2.00], zoom_start=10, tiles=None)
+folium.TileLayer("CartoDB positron", name="🗺️ Clean", overlay=False, control=True).add_to(m)
+folium.TileLayer(
+    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr="Esri", name="🛰️ Satellite", overlay=False, control=True,
+).add_to(m)
+
+# Aquifer extent (approximate polygon — Baix Llobregat alluvial plain)
+aquifer_polygon = {
+    "type": "FeatureCollection",
+    "features": [{
+        "type": "Feature",
+        "properties": {"name": "Baix Llobregat alluvial aquifer"},
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+                [1.88, 41.55], [1.92, 41.50], [1.98, 41.40], [2.05, 41.35],
+                [2.10, 41.32], [2.12, 41.30], [2.07, 41.28], [1.98, 41.30],
+                [1.90, 41.38], [1.85, 41.48], [1.86, 41.54], [1.88, 41.55]
+            ]]
+        }
+    }]
+}
+
+folium.GeoJson(
+    aquifer_polygon,
+    style_function=lambda _: {
+        "fillColor": "#9b00b3", "fillOpacity": 0.15,
+        "color": "#9b00b3", "weight": 2, "dashArray": "5 3",
+    },
+    tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=[""]),
+).add_to(m)
+
+# Llobregat river in this section
+folium.PolyLine(
+    locations=[[41.55, 1.93], [41.48, 1.93], [41.39, 2.02], [41.35, 2.05], [41.30, 2.07]],
+    color="#1e90ff", weight=3, opacity=0.7, tooltip="Llobregat",
+).add_to(m)
+
+# Sant Joan Despí marker (main gauge)
+folium.Marker(
+    location=[41.352, 2.047],
+    icon=folium.DivIcon(
+        html="""<div style="background:#0d1b2a;border:2px solid #0096c7;border-radius:6px;
+                           padding:3px 7px;white-space:nowrap;font-size:10px;color:white;
+                           font-family:sans-serif">💧 Sant Joan Despí</div>""",
+        icon_size=(130, 28), icon_anchor=(65, 14),
+    ),
+    popup="Sant Joan Despí river gauge — main channel monitoring point",
+).add_to(m)
+
+# Key towns
+for name, lat, lon in [("Barcelona", 41.383, 2.176), ("El Prat", 41.326, 2.095),
+                        ("Cornellà", 41.355, 2.076), ("Sant Boi", 41.343, 2.038)]:
+    folium.CircleMarker(
+        location=[lat, lon], radius=4,
+        color="white", fill=True, fill_color="#666", fill_opacity=0.7,
+        tooltip=name,
+    ).add_to(m)
+    folium.Marker(
+        location=[lat, lon],
+        icon=folium.DivIcon(
+            html=f'<div style="font-size:10px;color:#333;font-family:sans-serif;'
+                 f'font-weight:600;margin-left:6px">{name}</div>',
+            icon_size=(80, 18), icon_anchor=(0, 9),
+        ),
+    ).add_to(m)
+
+if stations:
+    for s in stations:
+        folium.Marker(
+            location=[s["lat"], s["lon"]],
+            icon=folium.DivIcon(
+                html=f"""<div style="background:#1a0026;border:2px solid #9b00b3;
+                                   border-radius:6px;padding:3px 7px;white-space:nowrap;
+                                   font-size:10px;color:white;font-family:sans-serif">
+                          🪨 {s['name']}</div>""",
+                icon_size=(120, 28), icon_anchor=(60, 14),
+            ),
+            popup=f"Piezometric station: {s['id']}",
+        ).add_to(m)
+
+folium.LayerControl(position="topright", collapsed=True).add_to(m)
+st_folium(m, use_container_width=True, height=480, returned_objects=[])
+
+# ── Status ─────────────────────────────────────────────────────────────────────
+if not stations:
+    st.info("""
+**Piezometric station IDs not yet configured.**
+
+The ACA network does publish piezometric data via Sentilo (`componentType=piezometre`),
+but the station IDs first need to be discovered and verified. Run:
+
+```bash
+python -m data.fetchers.discover_stations
+```
+
+(modify the `component_type` variable to `'piezometre'`) — this will write a
+CSV of all active piezometric components. Then add the verified IDs to
+`config/station_metadata.yaml` under `piezo_stations`.
+""")
+    st.stop()
+
+# ── If we have stations, show the data ────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def load_piezo_data(station_id: str) -> pd.DataFrame:
     files = sorted(CACHE_DIR.glob(f"piezo_{station_id}_*.parquet"))
@@ -33,84 +182,37 @@ def load_piezo_data(station_id: str) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.read_parquet(files[-1])
 
-@st.cache_data(ttl=3600)
-def load_piezo_stations() -> list:
-    meta_path = CONFIG_DIR / "station_metadata.yaml"
-    if not meta_path.exists():
-        return []
-    with open(meta_path) as f:
-        data = yaml.safe_load(f)
-    return data.get("piezo_stations") or []
-
-stations = load_piezo_stations()
-
-if not stations:
-    st.warning(
-        "No piezometric stations are configured yet. "
-        "Once ACA piezometric data has been explored and station IDs confirmed, "
-        "add them to `config/station_metadata.yaml` under `piezo_stations`."
-    )
-    st.caption(
-        "The ACA piezometric endpoint sometimes returns HTTP 204 (no content) "
-        "for stations with no recent readings. This is treated as missing data, not an error."
-    )
-    st.stop()
-
 station_options = {s["name"]: s["id"] for s in stations}
-selected_name = st.selectbox("Select piezometric station", list(station_options.keys()))
-selected_id = station_options[selected_name]
+selected_name   = st.selectbox("Select piezometric station", list(station_options.keys()))
+selected_id     = station_options[selected_name]
 
 df = load_piezo_data(selected_id)
-
 if df.empty:
-    st.warning(
-        f"No cached data for **{selected_name}** ({selected_id}). "
-        "The ACA piezometric network has irregular availability. "
-        "Run `python -m data.fetchers.refresh_all` to try fetching the latest data."
-    )
+    st.warning(f"No data cached for **{selected_name}** ({selected_id}).")
     st.stop()
 
 if pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-    df["timestamp_local"] = df["timestamp"].dt.tz_convert("Europe/Madrid")
+    df["ts"] = df["timestamp"].dt.tz_convert("Europe/Madrid")
 else:
-    df["timestamp_local"] = pd.to_datetime(df["timestamp"])
-df = df.sort_values("timestamp_local")
+    df["ts"] = pd.to_datetime(df["timestamp"])
+df = df.sort_values("ts")
 
 latest = df.iloc[-1]
 col1, col2 = st.columns(2)
-col1.metric(
-    "Depth to water table",
-    f"{latest.get('depth_m', np.nan):.2f} m" if not pd.isna(latest.get("depth_m")) else "—",
-)
-col2.metric(
-    "Piezometric level",
-    f"{latest.get('level_masl', np.nan):.2f} m a.s.l." if not pd.isna(latest.get("level_masl")) else "—",
-)
+col1.metric("Depth to water table",
+            f"{latest.get('depth_m', np.nan):.2f} m" if not pd.isna(latest.get("depth_m")) else "—")
+col2.metric("Piezometric level",
+            f"{latest.get('level_masl', np.nan):.2f} m a.s.l." if not pd.isna(latest.get("level_masl")) else "—")
 
-# ── Level time series ──────────────────────────────────────────────────────────
 if "level_masl" in df.columns and not df["level_masl"].isna().all():
-    fig = px.line(df, x="timestamp_local", y="level_masl",
-                  labels={"timestamp_local": "Time", "level_masl": "Level (m a.s.l.)"},
-                  color_discrete_sequence=["#8c564b"])
-    fig.update_layout(
-        title=f"Piezometric level — {selected_name}",
-        height=400, margin=dict(t=40, b=40),
-    )
+    fig = go.Figure(go.Scatter(
+        x=df["ts"], y=df["level_masl"], mode="lines",
+        fill="tozeroy", line=dict(color="#9b00b3", width=2),
+        fillcolor="rgba(155,0,179,0.10)",
+        hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.2f} m a.s.l.</b><extra></extra>",
+    ))
+    fig.update_layout(yaxis_title="Level (m a.s.l.)", xaxis_title="Time",
+                      height=360, margin=dict(t=20, b=40), template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
-if "depth_m" in df.columns and not df["depth_m"].isna().all():
-    fig2 = px.line(df, x="timestamp_local", y="depth_m",
-                   labels={"timestamp_local": "Time", "depth_m": "Depth to water (m)"},
-                   color_discrete_sequence=["#e377c2"])
-    # Invert y-axis so shallower water table = higher on chart
-    fig2.update_yaxes(autorange="reversed")
-    fig2.update_layout(
-        title=f"Depth to water table — {selected_name}",
-        height=300, margin=dict(t=40, b=40),
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-st.caption(
-    "⚠️ Data shown from cache only. Source: ACA piezometric network. "
-    "Alert thresholds for this station are not yet calibrated — see config/thresholds.yaml."
-)
+st.caption("⚠️ Data from cache only · Source: ACA piezometric network")

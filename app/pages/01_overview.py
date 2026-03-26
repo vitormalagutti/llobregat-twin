@@ -1,10 +1,10 @@
 """
 Page 1 — Overview: Watershed Map + System Status
 
-Three views via tabs:
-  🛰️ Satellite Map  — Folium with satellite/topo/clean tile switcher
-  📊 3D Live View   — pydeck ColumnLayer extruded by current flow / storage
-  📋 Status Table   — system status for all stations
+Tabs:
+  🗺️ Watershed Map  — Folium with watershed polygon, river paths, custom
+                       station icons (KPI card style), satellite/topo/clean tiles
+  📋 Status Table   — full status for all stations
 """
 import streamlit as st
 import pandas as pd
@@ -13,30 +13,76 @@ from streamlit_folium import st_folium
 from pathlib import Path
 import yaml
 import numpy as np
+import json
 
 st.set_page_config(page_title="Overview — Llobregat", layout="wide")
-
-# ── Hero banner ────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="background:linear-gradient(135deg,#023e8a 0%,#0096c7 60%,#48cae4 100%);
-            padding:1.4rem 2rem;border-radius:12px;margin-bottom:1rem">
-  <h2 style="color:white;margin:0;font-size:1.8rem">💧 Llobregat Watershed</h2>
-  <p style="color:#caf0f8;margin:0.2rem 0 0;font-size:0.95rem">
-    Live hydrological monitoring · Catalonia, Spain
-  </p>
-</div>
-""", unsafe_allow_html=True)
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 
+# ── Watershed & river geometry (approximate, hardcoded) ────────────────────────
+WATERSHED_GEOJSON = {
+    "type": "FeatureCollection",
+    "features": [{
+        "type": "Feature",
+        "properties": {"name": "Llobregat Watershed"},
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+                [1.73, 42.22], [1.62, 42.08], [1.52, 41.98], [1.50, 41.80],
+                [1.55, 41.62], [1.65, 41.48], [1.78, 41.37], [1.95, 41.28],
+                [2.10, 41.30], [2.18, 41.40], [2.14, 41.55], [2.03, 41.62],
+                [1.97, 41.78], [1.92, 41.97], [2.00, 42.12], [1.98, 42.23],
+                [1.73, 42.22]
+            ]]
+        }
+    }]
+}
 
+RIVERS_GEOJSON = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"name": "Llobregat", "type": "main"},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [1.97, 42.21], [1.88, 42.12], [1.878, 42.08], [1.880, 41.86],
+                    [1.858, 41.65], [1.858, 41.55], [1.948, 41.47], [1.933, 41.48],
+                    [2.023, 41.39], [2.047, 41.35], [2.070, 41.30]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {"name": "Cardener", "type": "tributary"},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [1.583, 42.10], [1.606, 41.96], [1.696, 41.92],
+                    [1.763, 41.81], [1.830, 41.73], [1.858, 41.65]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {"name": "Anoia", "type": "tributary"},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [1.788, 41.44], [1.850, 41.46], [1.929, 41.48], [1.948, 41.47]
+                ]
+            }
+        }
+    ]
+}
+
+# ── Data helpers ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def load_meta() -> dict:
-    p = CONFIG_DIR / "station_metadata.yaml"
-    with open(p) as f:
+    with open(CONFIG_DIR / "station_metadata.yaml") as f:
         return yaml.safe_load(f)
-
 
 @st.cache_data(ttl=3600)
 def load_thresholds() -> dict:
@@ -46,7 +92,6 @@ def load_thresholds() -> dict:
     with open(p) as f:
         return yaml.safe_load(f)
 
-
 @st.cache_data(ttl=1800)
 def load_latest(prefix: str, station_id: str) -> pd.DataFrame:
     files = sorted(CACHE_DIR.glob(f"{prefix}_{station_id}_*.parquet"))
@@ -54,398 +99,401 @@ def load_latest(prefix: str, station_id: str) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.read_parquet(files[-1])
 
-
-def alert_badge(level: str) -> str:
-    cfg = {
-        "critical": ("#c0392b", "🔴 Critical"),
-        "watch":    ("#e67e22", "🟠 Watch"),
-        "normal":   ("#27ae60", "🟢 Normal"),
-        "low_flow": ("#8e44ad", "🟣 Low flow"),
-        "no_data":  ("#7f8c8d", "⚫ No data"),
-    }
-    color, label = cfg.get(level, ("#7f8c8d", level))
-    return (f'<span style="background:{color};color:white;'
-            f'padding:3px 10px;border-radius:12px;font-size:0.8rem;'
-            f'font-weight:600">{label}</span>')
-
-
-def gauge_alert(flow, thresholds):
-    if pd.isna(flow):
-        return "no_data"
-    d = thresholds.get("flow_alert_m3s", {}).get("defaults", {})
-    if flow >= d.get("flood_warning", 300):
-        return "critical"
-    if flow >= d.get("flood_watch", 100):
-        return "watch"
-    if flow <= d.get("low_flow_warning", 1):
-        return "low_flow"
-    return "normal"
-
-
-def reservoir_alert(pct, thresholds):
-    if pd.isna(pct):
-        return "no_data"
-    d = thresholds.get("reservoir_alert_pct", {})
-    if pct <= d.get("critically_low", 20):
-        return "critical"
-    if pct <= d.get("low", 40):
-        return "watch"
-    return "normal"
-
-
-meta = load_meta()
+meta       = load_meta()
 thresholds = load_thresholds()
 
-# ── Top KPI strip ─────────────────────────────────────────────────────────────
-gauges     = meta.get("gauge_stations", [])
-reservoirs = meta.get("reservoirs", [])
+gauge_stations  = meta.get("gauge_stations", [])
+reservoirs      = meta.get("reservoirs", [])
+meteo_stations  = meta.get("meteo_stations", [])
 
-total_vol = 0.0
-total_cap = 0.0
-live_gauges = 0
-for res in reservoirs:
-    df = load_latest("reservoir", res["id"])
-    if not df.empty:
-        latest = df.sort_values("timestamp").iloc[-1]
-        v = latest.get("volume_hm3", np.nan)
-        c = latest.get("capacity_hm3", res.get("capacity_hm3", np.nan))
-        if not pd.isna(v) and not pd.isna(c):
-            total_vol += v
-            total_cap += c
+flood_warn  = thresholds.get("flow_alert_m3s", {}).get("defaults", {}).get("flood_warning")
+flood_watch = thresholds.get("flow_alert_m3s", {}).get("defaults", {}).get("flood_watch")
+low_flow    = thresholds.get("flow_alert_m3s", {}).get("defaults", {}).get("low_flow_warning")
+res_crit    = thresholds.get("reservoir_alert_pct", {}).get("critically_low", 20)
+res_low     = thresholds.get("reservoir_alert_pct", {}).get("low", 40)
 
-for stn in gauges:
-    df = load_latest("flow", stn["id"])
-    if not df.empty:
-        live_gauges += 1
+# ── Alert helpers ──────────────────────────────────────────────────────────────
+def gauge_alert(flow):
+    if pd.isna(flow):                              return "no_data",  "#95a5a6"
+    if flood_warn  and flow >= flood_warn:         return "critical", "#c0392b"
+    if flood_watch and flow >= flood_watch:        return "watch",    "#e67e22"
+    if low_flow    and flow <= low_flow:           return "low_flow", "#8e44ad"
+    return "normal", "#27ae60"
 
-total_pct = (total_vol / total_cap * 100) if total_cap > 0 else np.nan
+def res_alert(pct):
+    if np.isnan(pct):           return "no_data",  "#95a5a6"
+    if pct <= res_crit:         return "critical", "#c0392b"
+    if pct <= res_low:          return "watch",    "#e67e22"
+    if pct >= 80:               return "full",     "#27ae60"
+    return "normal", "#0096c7"
 
-# Martorell as main stem reference
-martorell_flow = np.nan
-for stn in gauges:
-    if "081141-003" in stn["id"]:
-        df = load_latest("flow", stn["id"])
-        if not df.empty:
-            martorell_flow = df.sort_values("timestamp").iloc[-1].get("flow_m3s", np.nan)
+# ── Collect latest values (BCN-first: sort lower → upper) ─────────────────────
+# Sort gauges: lower_llobregat first (closest to BCN), then others
+BASIN_ORDER = {"lower_llobregat": 0, "anoia": 1, "middle_llobregat": 2,
+               "cardener": 3, "upper_llobregat": 4, "other": 5}
+sorted_gauges = sorted(gauge_stations,
+                       key=lambda s: (BASIN_ORDER.get(s.get("sub_basin","other"), 5),
+                                      s.get("priority", 9)))
 
-st.markdown("""<style>
-[data-testid="stMetric"]{background:#f0f4f8;border-radius:10px;
-  padding:12px 16px;border-left:4px solid #0096c7}
-[data-testid="stMetricLabel"]{font-size:0.82rem;color:#555}
-[data-testid="stMetricValue"]{font-size:1.5rem;font-weight:700}
-</style>""", unsafe_allow_html=True)
+gauge_latest = {}
+for s in gauge_stations:
+    df = load_latest("flow", s["id"])
+    if df.empty:
+        gauge_latest[s["id"]] = {"flow": np.nan, "level": np.nan, "trend": "→"}
+        continue
+    df2 = df.sort_values("timestamp")
+    flow  = float(df2["flow_m3s"].iloc[-1]) if "flow_m3s" in df2.columns else np.nan
+    level = float(df2["level_m"].iloc[-1])  if "level_m"  in df2.columns else np.nan
+    prev  = df2["flow_m3s"].iloc[-min(len(df2), 12)] if len(df2) >= 2 else flow
+    trend = "↑" if flow > prev * 1.05 else ("↓" if flow < prev * 0.95 else "→")
+    gauge_latest[s["id"]] = {"flow": flow, "level": level, "trend": trend}
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("🏞️ Reservoir storage",
-          f"{total_pct:.1f}%" if not np.isnan(total_pct) else "—",
-          f"{total_vol:.0f} / {total_cap:.0f} hm³")
-c2.metric("🌊 Main stem (Martorell)",
-          f"{martorell_flow:.1f} m³/s" if not np.isnan(martorell_flow) else "—")
-c3.metric("📡 Live gauge stations", f"{live_gauges} / {len(gauges)}")
-c4.metric("💧 Reservoirs tracked", str(len(reservoirs)))
+res_latest = {}
+for r in reservoirs:
+    df = load_latest("reservoir", r["id"])
+    if df.empty:
+        res_latest[r["id"]] = {"pct": np.nan, "vol": np.nan}
+        continue
+    row = df.sort_values("timestamp").iloc[-1]
+    pct = float(row.get("pct_capacity", np.nan)) if not pd.isna(row.get("pct_capacity")) else np.nan
+    vol = float(row.get("volume_hm3", np.nan))   if not pd.isna(row.get("volume_hm3"))   else np.nan
+    res_latest[r["id"]] = {"pct": pct, "vol": vol}
 
-st.divider()
-
-# ── Tabs ───────────────────────────────────────────────────────────────────────
-tab_sat, tab_3d, tab_table = st.tabs(["🛰️ Satellite Map", "📊 3D Live View", "📋 Status"])
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 1: Satellite Folium map
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_sat:
-    m = folium.Map(location=[41.75, 1.90], zoom_start=9, tiles=None)
-
-    # Satellite (Esri — no API key)
-    folium.TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri World Imagery",
-        name="🛰️ Satellite",
-        overlay=False, control=True,
-    ).add_to(m)
-
-    # Topographic
-    folium.TileLayer(
-        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
-        attr="© OpenTopoMap",
-        name="🗻 Topographic",
-        overlay=False, control=True,
-    ).add_to(m)
-
-    # Clean
-    folium.TileLayer("CartoDB positron", name="🗺️ Clean", overlay=False, control=True).add_to(m)
-
-    alert_colors = {
-        "critical": "red", "watch": "orange",
-        "normal": "blue", "low_flow": "purple", "no_data": "gray",
+meteo_latest = {}
+for m in meteo_stations:
+    df = load_latest("meteo", m["id"])
+    if df.empty:
+        meteo_latest[m["id"]] = {"temp": np.nan, "precip": np.nan}
+        continue
+    row = df.sort_values("timestamp").iloc[-1]
+    meteo_latest[m["id"]] = {
+        "temp":   float(row.get("temp_c",    np.nan)) if not pd.isna(row.get("temp_c"))    else np.nan,
+        "precip": float(row.get("precip_mm", np.nan)) if not pd.isna(row.get("precip_mm")) else np.nan,
     }
 
-    # Gauge stations
-    for stn in gauges:
-        df = load_latest("flow", stn["id"])
-        if df.empty:
-            level = "no_data"
-            flow_str = "No data"
-            level_str = "—"
-        else:
-            latest = df.sort_values("timestamp").iloc[-1]
-            flow = latest.get("flow_m3s", np.nan)
-            lvl  = latest.get("level_m", np.nan)
-            level = gauge_alert(flow, thresholds)
-            flow_str  = f"{flow:.2f} m³/s" if not pd.isna(flow) else "—"
-            level_str = f"{lvl:.2f} m"    if not pd.isna(lvl)  else "—"
+# System totals
+total_cap = sum(float(r.get("capacity_hm3", 0) or 0) for r in reservoirs)
+total_vol = sum(v["vol"] for v in res_latest.values() if not np.isnan(v["vol"]))
+sys_pct   = (total_vol / total_cap * 100) if total_cap > 0 else np.nan
 
-        popup_html = f"""
-        <div style='font-family:sans-serif;min-width:160px'>
-          <b style='font-size:1rem'>🌊 {stn['name']}</b><br>
-          <hr style='margin:4px 0'>
-          <table style='font-size:0.85rem;width:100%'>
-            <tr><td>Flow</td><td><b>{flow_str}</b></td></tr>
-            <tr><td>Stage</td><td><b>{level_str}</b></td></tr>
-            <tr><td>River</td><td>{stn.get('river','—')}</td></tr>
-          </table>
+# Main channel gauge (Sant Joan Despí)
+sjd = next((s for s in gauge_stations if "Sant Joan Desp" in s["name"]), None)
+sjd_flow  = gauge_latest[sjd["id"]]["flow"]  if sjd else np.nan
+sjd_trend = gauge_latest[sjd["id"]]["trend"] if sjd else "→"
+
+n_active = sum(1 for v in gauge_latest.values() if not np.isnan(v["flow"]))
+
+# ── Hero banner ────────────────────────────────────────────────────────────────
+sjd_flow_str = f"{sjd_flow:.1f} m³/s" if not np.isnan(sjd_flow) else "—"
+sys_pct_str  = f"{sys_pct:.1f}%" if not np.isnan(sys_pct) else "—"
+
+st.markdown(f"""
+<div style="background:linear-gradient(135deg,#023e8a 0%,#0096c7 60%,#48cae4 100%);
+            padding:1.4rem 2rem;border-radius:12px;margin-bottom:1rem;
+            display:flex;align-items:center;justify-content:space-between">
+  <div>
+    <h2 style="color:white;margin:0;font-size:1.8rem">💧 Llobregat Watershed</h2>
+    <p style="color:#caf0f8;margin:0.2rem 0 0;font-size:0.9rem">
+      Live hydrological monitoring · {n_active} of {len(gauge_stations)} gauges active
+    </p>
+  </div>
+  <div style="display:flex;gap:2rem;text-align:center">
+    <div>
+      <div style="color:#caf0f8;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em">
+        Sant Joan Despí
+      </div>
+      <div style="color:white;font-size:1.6rem;font-weight:800">{sjd_flow_str} {sjd_trend}</div>
+    </div>
+    <div>
+      <div style="color:#caf0f8;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em">
+        Reservoir system
+      </div>
+      <div style="color:white;font-size:1.6rem;font-weight:800">{sys_pct_str}</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── KPI strip (BCN-first) ──────────────────────────────────────────────────────
+# Show top 6 BCN-area stations
+top_stations = sorted_gauges[:6]
+kpi_cols = st.columns(6)
+for i, s in enumerate(top_stations):
+    info = gauge_latest[s["id"]]
+    flow = info["flow"]
+    _, color = gauge_alert(flow)
+    flow_str   = f"{flow:.1f} m³/s" if not np.isnan(flow) else "—"
+    short_name = s["name"].split(" (")[0][:16]
+    with kpi_cols[i]:
+        st.markdown(f"""
+<div style="background:#0d1b2a;border:2px solid {color};border-radius:10px;
+            padding:0.6rem;text-align:center">
+  <div style="color:#90e0ef;font-size:0.65rem;font-weight:700;text-transform:uppercase">{short_name}</div>
+  <div style="color:white;font-size:1.2rem;font-weight:800;margin:0.2rem 0">{flow_str}</div>
+  <div style="color:{color};font-size:0.85rem">{info['trend']}</div>
+</div>""", unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── Tabs ───────────────────────────────────────────────────────────────────────
+tab_map, tab_status = st.tabs(["🗺️ Watershed Map", "📋 Status Table"])
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — WATERSHED MAP
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_map:
+    m = folium.Map(location=[41.75, 1.85], zoom_start=9, tiles=None)
+
+    # ── Tile layers ──
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery", name="🛰️ Satellite", overlay=False, control=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        attr="OpenTopoMap", name="🗻 Topographic", overlay=False, control=True,
+    ).add_to(m)
+    folium.TileLayer("CartoDB positron", name="🗺️ Clean", overlay=False, control=True).add_to(m)
+
+    # ── Watershed polygon ──
+    folium.GeoJson(
+        WATERSHED_GEOJSON,
+        name="🌍 Watershed boundary",
+        style_function=lambda _: {
+            "fillColor":   "#0096c7",
+            "fillOpacity": 0.07,
+            "color":       "#0096c7",
+            "weight":      2,
+            "dashArray":   "6 4",
+        },
+        tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=[""]),
+    ).add_to(m)
+
+    # ── River paths ──
+    def river_style(feature):
+        t = feature["properties"].get("type", "tributary")
+        return {
+            "color":   "#1e90ff" if t == "main" else "#48cae4",
+            "weight":  3 if t == "main" else 1.8,
+            "opacity": 0.75,
+        }
+
+    folium.GeoJson(
+        RIVERS_GEOJSON,
+        name="🌊 River network",
+        style_function=river_style,
+        tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=[""]),
+    ).add_to(m)
+
+    # ── Gauge station markers (KPI card style) ──
+    gauge_fg = folium.FeatureGroup(name="💧 Gauge stations", show=True)
+    for s in gauge_stations:
+        info = gauge_latest[s["id"]]
+        flow = info["flow"]
+        trend = info["trend"]
+        alert_lvl, color = gauge_alert(flow)
+        flow_str   = f"{flow:.1f}" if not np.isnan(flow) else "—"
+        short_name = s["name"].split(" (")[0][:16]
+        river_name = s.get("river", "")
+
+        # KPI card DivIcon
+        card_html = f"""
+        <div style="background:#0d1b2a;border:2px solid {color};border-radius:8px;
+                    padding:4px 8px;min-width:88px;text-align:center;white-space:nowrap;
+                    box-shadow:2px 3px 8px rgba(0,0,0,0.7);font-family:sans-serif">
+          <div style="color:#90e0ef;font-size:9px;font-weight:700;text-transform:uppercase;
+                      letter-spacing:0.04em">💧 {short_name}</div>
+          <div style="color:white;font-size:15px;font-weight:900;margin:1px 0;
+                      line-height:1">{flow_str} m³/s</div>
+          <div style="color:{color};font-size:11px">{trend}</div>
         </div>"""
 
-        folium.CircleMarker(
-            location=[stn["lat"], stn["lon"]],
-            radius=9, color=alert_colors[level],
-            fill=True, fill_opacity=0.85, weight=2,
-            popup=folium.Popup(popup_html, max_width=220),
-            tooltip=f"🌊 {stn['name']}",
-        ).add_to(m)
-
-    # Reservoirs — diamond icon via DivIcon
-    for res in reservoirs:
-        df = load_latest("reservoir", res["id"])
-        if df.empty:
-            level = "no_data"
-            pct_str = "No data"
-            vol_str = "—"
-        else:
-            latest = df.sort_values("timestamp").iloc[-1]
-            pct = latest.get("pct_capacity", np.nan)
-            vol = latest.get("volume_hm3",  np.nan)
-            level = reservoir_alert(pct, thresholds)
-            pct_str = f"{pct:.1f}%" if not pd.isna(pct) else "—"
-            vol_str = f"{vol:.1f} hm³" if not pd.isna(vol) else "—"
-
-        col = alert_colors[level]
-        icon_html = (
-            f'<div style="width:20px;height:20px;background:{col};'
-            f'transform:rotate(45deg);border:2px solid white;'
-            f'box-shadow:0 0 4px rgba(0,0,0,0.5)"></div>'
-        )
         popup_html = f"""
-        <div style='font-family:sans-serif;min-width:160px'>
-          <b style='font-size:1rem'>🏞️ {res['name']}</b><br>
-          <hr style='margin:4px 0'>
-          <table style='font-size:0.85rem;width:100%'>
-            <tr><td>Storage</td><td><b>{pct_str}</b></td></tr>
-            <tr><td>Volume</td><td><b>{vol_str}</b></td></tr>
-            <tr><td>Capacity</td><td>{res.get('capacity_hm3','—')} hm³</td></tr>
+        <div style="font-family:sans-serif;min-width:180px">
+          <b style="font-size:13px">{s['name']}</b><br>
+          <span style="color:grey;font-size:11px">{river_name} · {s.get('sub_basin','').replace('_',' ').title()}</span>
+          <hr style="margin:4px 0">
+          <table style="font-size:12px;width:100%">
+            <tr><td><b>Flow</b></td><td>{flow_str} m³/s {trend}</td></tr>
+            <tr><td><b>Stage</b></td>
+                <td>{"%.3f m" % info['level'] if not np.isnan(info['level']) else "—"}</td></tr>
+            <tr><td><b>Status</b></td>
+                <td><span style="color:{color}">{alert_lvl.replace('_',' ').title()}</span></td></tr>
           </table>
         </div>"""
 
         folium.Marker(
-            location=[res["lat"], res["lon"]],
-            icon=folium.DivIcon(html=icon_html, icon_size=(20, 20), icon_anchor=(10, 10)),
+            location=[s["lat"], s["lon"]],
+            icon=folium.DivIcon(
+                html=card_html,
+                icon_size=(95, 58),
+                icon_anchor=(47, 29),
+            ),
             popup=folium.Popup(popup_html, max_width=220),
-            tooltip=f"🏞️ {res['name']} — {pct_str}",
-        ).add_to(m)
+        ).add_to(gauge_fg)
+    gauge_fg.add_to(m)
 
-    # Meteo stations
-    for stn in meta.get("meteo_stations", []):
-        folium.CircleMarker(
-            location=[stn["lat"], stn["lon"]],
-            radius=6, color="#2ca02c",
-            fill=True, fill_opacity=0.7, weight=2,
-            popup=folium.Popup(f"<b>☁️ {stn['name']}</b><br>AEMET meteo station", max_width=180),
-            tooltip=f"☁️ {stn['name']}",
-        ).add_to(m)
+    # ── Reservoir markers ──
+    res_fg = folium.FeatureGroup(name="🏔️ Reservoirs", show=True)
+    for r in reservoirs:
+        v   = res_latest[r["id"]]
+        pct = v["pct"]
+        vol = v["vol"]
+        _, color = res_alert(pct)
+        pct_str = f"{pct:.0f}%" if not np.isnan(pct) else "—"
+        vol_str = f"{vol:.1f} hm³" if not np.isnan(vol) else "—"
+        short   = r["name"][:14]
 
-    # Legend
-    legend_html = """
-    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
-         background:rgba(255,255,255,0.95);padding:12px 16px;border-radius:10px;
-         border:1px solid #ccc;font-size:12px;font-family:sans-serif;
-         box-shadow:0 2px 8px rgba(0,0,0,0.15)">
-      <b>🌊 Gauge stations</b><br>
-      <span style="color:#1f77b4">●</span> Normal &nbsp;
-      <span style="color:orange">●</span> Watch &nbsp;
-      <span style="color:red">●</span> Warning &nbsp;
-      <span style="color:purple">●</span> Low &nbsp;
-      <span style="color:gray">●</span> No data<br><br>
-      <b>🏞️ Reservoirs</b> (◆) &nbsp;&nbsp; <b>☁️ Meteo</b> (🟢)
-    </div>"""
-    m.get_root().html.add_child(folium.Element(legend_html))
+        card_html = f"""
+        <div style="background:#03045e;border:2px solid {color};border-radius:8px;
+                    padding:4px 8px;min-width:80px;text-align:center;white-space:nowrap;
+                    box-shadow:2px 3px 8px rgba(0,0,0,0.7);font-family:sans-serif">
+          <div style="color:#90e0ef;font-size:9px;font-weight:700;text-transform:uppercase">
+            🏔️ {short}</div>
+          <div style="color:white;font-size:15px;font-weight:900;margin:1px 0;line-height:1">
+            {pct_str}</div>
+          <div style="color:grey;font-size:9px">{vol_str}</div>
+        </div>"""
+
+        popup_html = f"""
+        <div style="font-family:sans-serif;min-width:180px">
+          <b style="font-size:13px">🏔️ {r['name']}</b><br>
+          <span style="color:grey;font-size:11px">{r.get('river','')} reservoir</span>
+          <hr style="margin:4px 0">
+          <table style="font-size:12px;width:100%">
+            <tr><td><b>Storage</b></td><td>{pct_str}</td></tr>
+            <tr><td><b>Volume</b></td><td>{vol_str}</td></tr>
+            <tr><td><b>Capacity</b></td>
+                <td>{r.get('capacity_hm3','?')} hm³</td></tr>
+          </table>
+        </div>"""
+
+        folium.Marker(
+            location=[r["lat"], r["lon"]],
+            icon=folium.DivIcon(
+                html=card_html,
+                icon_size=(85, 58),
+                icon_anchor=(42, 29),
+            ),
+            popup=folium.Popup(popup_html, max_width=220),
+        ).add_to(res_fg)
+    res_fg.add_to(m)
+
+    # ── Meteo station markers ──
+    meteo_fg = folium.FeatureGroup(name="⛅ Meteo stations", show=True)
+    for mt in meteo_stations:
+        info  = meteo_latest[mt["id"]]
+        temp  = info["temp"]
+        prec  = info["precip"]
+        temp_str = f"{temp:.1f}°C" if not np.isnan(temp) else "—"
+        prec_str = f"{prec:.1f} mm" if not np.isnan(prec) else "—"
+        short    = mt["name"][:12]
+
+        card_html = f"""
+        <div style="background:#1a1a2e;border:2px solid #2ca02c;border-radius:8px;
+                    padding:4px 8px;min-width:75px;text-align:center;white-space:nowrap;
+                    box-shadow:2px 3px 8px rgba(0,0,0,0.7);font-family:sans-serif">
+          <div style="color:#90e0ef;font-size:9px;font-weight:700;text-transform:uppercase">
+            ⛅ {short}</div>
+          <div style="color:white;font-size:14px;font-weight:900;margin:1px 0;line-height:1">
+            {temp_str}</div>
+          <div style="color:grey;font-size:9px">💧 {prec_str}</div>
+        </div>"""
+
+        popup_html = f"""
+        <div style="font-family:sans-serif">
+          <b>⛅ {mt['name']}</b><br>
+          <span style="color:grey;font-size:11px">AEMET station {mt['id']}</span>
+          <hr style="margin:4px 0">
+          <span style="font-size:12px">🌡️ {temp_str} &nbsp; 💧 {prec_str}</span>
+        </div>"""
+
+        folium.Marker(
+            location=[mt["lat"], mt["lon"]],
+            icon=folium.DivIcon(
+                html=card_html,
+                icon_size=(80, 55),
+                icon_anchor=(40, 27),
+            ),
+            popup=folium.Popup(popup_html, max_width=200),
+        ).add_to(meteo_fg)
+    meteo_fg.add_to(m)
+
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
-    st_folium(m, width="100%", height=580)
+    st_folium(m, use_container_width=True, height=620, returned_objects=[])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 2: pydeck 3D
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_3d:
-    try:
-        import pydeck as pdk
+    # Legend
+    st.markdown("""
+<div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:0.8rem;margin-top:0.5rem">
+  <span>💧 <b>Gauge station</b> — flow m³/s</span>
+  <span>🏔️ <b>Reservoir</b> — % capacity</span>
+  <span>⛅ <b>Weather station</b> — temperature</span>
+  <span style="color:#c0392b">🔴 Flood warning</span>
+  <span style="color:#e67e22">🟠 Flood watch</span>
+  <span style="color:#27ae60">🟢 Normal</span>
+  <span style="color:#8e44ad">🟣 Low flow</span>
+  <span style="color:#95a5a6">⚫ No data</span>
+</div>""", unsafe_allow_html=True)
 
-        gauge_records = []
-        max_flow = 1.0
-        for stn in gauges:
-            df = load_latest("flow", stn["id"])
-            flow = np.nan
-            if not df.empty:
-                flow = df.sort_values("timestamp").iloc[-1].get("flow_m3s", np.nan)
-            if not pd.isna(flow):
-                max_flow = max(max_flow, float(flow))
-            gauge_records.append({
-                "lat": stn["lat"], "lon": stn["lon"],
-                "name": stn["name"], "river": stn.get("river", ""),
-                "flow": float(flow) if not pd.isna(flow) else 0.0,
-            })
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — STATUS TABLE
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_status:
+    st.subheader("All stations — current status")
 
-        for r in gauge_records:
-            norm = r["flow"] / max_flow
-            r["color"] = [
-                int(0   + norm * 192),   # R: 0 → 192
-                int(150 - norm * 100),   # G: 150 → 50
-                int(200 - norm * 200),   # B: 200 → 0
-                220
-            ]
-            r["elevation"] = r["flow"]
+    BADGE = {
+        "critical": "🔴 Flood warning",
+        "watch":    "🟠 Watch",
+        "normal":   "🟢 Normal",
+        "low_flow": "🟣 Low flow",
+        "no_data":  "⚫ No data",
+        "full":     "🟢 Full",
+    }
 
-        res_records = []
-        for res in reservoirs:
-            df = load_latest("reservoir", res["id"])
-            pct = np.nan
-            vol = np.nan
-            if not df.empty:
-                latest = df.sort_values("timestamp").iloc[-1]
-                pct = latest.get("pct_capacity", np.nan)
-                vol = latest.get("volume_hm3", np.nan)
-            pct_val = float(pct) if not pd.isna(pct) else 0.0
-            res_records.append({
-                "lat": res["lat"], "lon": res["lon"],
-                "name": res["name"],
-                "pct": pct_val,
-                "vol": float(vol) if not pd.isna(vol) else 0.0,
-                "cap": float(res.get("capacity_hm3", 100)),
-                "elevation": pct_val * 800,
-                "color": [
-                    int(192 * (1 - pct_val / 100)),
-                    int(39 + 100 * (pct_val / 100)),
-                    int(200 * (pct_val / 100)),
-                    220
-                ],
-            })
-
-        gauge_layer = pdk.Layer(
-            "ColumnLayer",
-            data=gauge_records,
-            get_position=["lon", "lat"],
-            get_elevation="elevation",
-            elevation_scale=600,
-            radius=600,
-            get_fill_color="color",
-            pickable=True,
-            auto_highlight=True,
-            extruded=True,
-        )
-
-        res_layer = pdk.Layer(
-            "ColumnLayer",
-            data=res_records,
-            get_position=["lon", "lat"],
-            get_elevation="elevation",
-            elevation_scale=5,
-            radius=1200,
-            get_fill_color="color",
-            pickable=True,
-            auto_highlight=True,
-            extruded=True,
-        )
-
-        view = pdk.ViewState(
-            latitude=41.80, longitude=1.85,
-            zoom=8.5, pitch=52, bearing=-8,
-        )
-
-        deck = pdk.Deck(
-            layers=[gauge_layer, res_layer],
-            initial_view_state=view,
-            map_style="mapbox://styles/mapbox/satellite-streets-v11",
-            tooltip={
-                "html": "<b>{name}</b><br>Flow: {flow:.1f} m³/s<br>Storage: {pct:.0f}%",
-                "style": {"backgroundColor": "rgba(0,0,0,0.8)", "color": "white",
-                          "padding": "8px", "borderRadius": "6px", "fontSize": "13px"},
-            },
-        )
-
-        st.markdown("""
-        <div style='background:#0d1b2a;color:#90e0ef;padding:10px 16px;
-             border-radius:8px;margin-bottom:8px;font-size:0.85rem'>
-          🌊 <b>Blue columns</b> = river gauges (height = flow m³/s) &nbsp;|&nbsp;
-          🔵 <b>Teal cylinders</b> = reservoirs (height = % storage) &nbsp;|&nbsp;
-          Drag to rotate · Scroll to zoom
-        </div>""", unsafe_allow_html=True)
-
-        st.pydeck_chart(deck, use_container_width=True, height=580)
-
-    except ImportError:
-        st.warning("pydeck not installed. Run `pip install pydeck` then restart the app.")
-        st.info("Showing 2D fallback map instead.")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 3: Status table
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_table:
     rows = []
-    for stn in gauges:
-        df = load_latest("flow", stn["id"])
-        if df.empty:
-            rows.append({"Station": stn["name"], "Type": "🌊 Gauge",
-                         "River": stn.get("river","—"), "Latest value": "—",
-                         "Status": "⚫ No data", "Sub-basin": stn.get("sub_basin","—")})
-        else:
-            latest = df.sort_values("timestamp").iloc[-1]
-            flow   = latest.get("flow_m3s", np.nan)
-            ts     = pd.Timestamp(latest["timestamp"]).tz_convert("Europe/Madrid").strftime("%Y-%m-%d %H:%M") \
-                     if hasattr(latest.get("timestamp"), "tz_convert") else "—"
-            level  = gauge_alert(flow, thresholds)
-            labels = {"critical":"🔴 Critical","watch":"🟠 Watch",
-                      "normal":"🟢 Normal","low_flow":"🟣 Low flow","no_data":"⚫ No data"}
-            rows.append({
-                "Station": stn["name"], "Type": "🌊 Gauge",
-                "River": stn.get("river","—"),
-                "Latest value": f"{flow:.2f} m³/s" if not pd.isna(flow) else "—",
-                "Status": labels[level], "Sub-basin": stn.get("sub_basin","—"),
-            })
+    for s in sorted_gauges:
+        info  = gauge_latest[s["id"]]
+        flow  = info["flow"]
+        level = info["level"]
+        alv, _ = gauge_alert(flow)
+        rows.append({
+            "Type":     "💧 Gauge",
+            "Name":     s["name"],
+            "River":    s.get("river", "—"),
+            "Value":    f"{flow:.2f} m³/s" if not np.isnan(flow) else "—",
+            "Stage":    f"{level:.3f} m"   if not np.isnan(level) else "—",
+            "Trend":    info["trend"],
+            "Status":   BADGE.get(alv, alv),
+        })
 
-    for res in reservoirs:
-        df = load_latest("reservoir", res["id"])
-        if df.empty:
-            rows.append({"Station": res["name"], "Type": "🏞️ Reservoir",
-                         "River": res.get("river","—"), "Latest value": "—",
-                         "Status": "⚫ No data", "Sub-basin": res.get("sub_basin","—")})
-        else:
-            latest = df.sort_values("timestamp").iloc[-1]
-            pct   = latest.get("pct_capacity", np.nan)
-            level = reservoir_alert(pct, thresholds)
-            labels = {"critical":"🔴 Critical","watch":"🟠 Watch",
-                      "normal":"🟢 Normal","no_data":"⚫ No data"}
-            rows.append({
-                "Station": res["name"], "Type": "🏞️ Reservoir",
-                "River": res.get("river","—"),
-                "Latest value": f"{pct:.1f}%" if not pd.isna(pct) else "—",
-                "Status": labels[level], "Sub-basin": res.get("sub_basin","—"),
-            })
+    for r in reservoirs:
+        v   = res_latest[r["id"]]
+        pct = v["pct"]
+        vol = v["vol"]
+        alv, _ = res_alert(pct)
+        rows.append({
+            "Type":   "🏔️ Reservoir",
+            "Name":   r["name"],
+            "River":  r.get("river", "—"),
+            "Value":  f"{pct:.1f}%" if not np.isnan(pct) else "—",
+            "Stage":  f"{vol:.1f} hm³" if not np.isnan(vol) else "—",
+            "Trend":  "—",
+            "Status": BADGE.get(alv, alv),
+        })
 
-    st.dataframe(
-        pd.DataFrame(rows),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Status": st.column_config.TextColumn("Status", width="medium"),
-            "Latest value": st.column_config.TextColumn("Latest value", width="medium"),
-        },
-    )
-    st.caption(f"Showing {len(rows)} monitored stations. Cache refreshed every 30 min.")
+    for mt in meteo_stations:
+        info = meteo_latest[mt["id"]]
+        temp = info["temp"]
+        rows.append({
+            "Type":   "⛅ Meteo",
+            "Name":   mt["name"],
+            "River":  "—",
+            "Value":  f"{temp:.1f} °C" if not np.isnan(temp) else "—",
+            "Stage":  "—",
+            "Trend":  "—",
+            "Status": "🟢 Active" if not np.isnan(temp) else "⚫ No data",
+        })
+
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption("💧 Gauge data: ACA Sentilo · ⛅ Meteo: AEMET OpenData · Cache refreshes every 30 min.")
