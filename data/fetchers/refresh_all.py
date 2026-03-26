@@ -217,8 +217,9 @@ def main() -> None:
             errors.append(f"meteo: {e}")
 
     if errors:
-        logger.error(f"=== Refresh completed WITH ERRORS: {errors} ===")
-        sys.exit(1)
+        # Log but do NOT exit(1) — partial failures (bad station IDs, temporary
+        # network issues) are expected. Working stations' cache is still valid.
+        logger.warning(f"=== Refresh completed with {len(errors)} non-fatal error(s): {errors} ===")
     else:
         logger.info("=== Refresh completed successfully ===")
 

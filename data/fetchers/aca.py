@@ -348,6 +348,9 @@ def fetch_aca_gauge_data(
                     f"Gauge sensor {sensor_id}: HTTP {e.response.status_code} — skipping."
                 )
                 continue
+            except httpx.HTTPError as e:
+                logger.warning(f"Gauge sensor {sensor_id}: network error ({type(e).__name__}) — skipping.")
+                continue
 
             if data is None:
                 logger.info(f"No data for sensor {sensor_id}")
@@ -440,6 +443,9 @@ def fetch_aca_reservoir_data(
                 logger.warning(
                     f"Reservoir sensor {sensor_id}: HTTP {e.response.status_code} — skipping."
                 )
+                continue
+            except httpx.HTTPError as e:
+                logger.warning(f"Reservoir sensor {sensor_id}: network error ({type(e).__name__}) — skipping.")
                 continue
 
             if data is None:
