@@ -1,5 +1,6 @@
 """
 Page 4 — Meteorology
+IBM Carbon Design System — Gray 100 dark theme
 
 - Hero KPI strip: all active meteo stations (BCN-first)
 - 7-day AEMET forecast cards for the nearest active municipio
@@ -13,13 +14,32 @@ from pathlib import Path
 import yaml
 import numpy as np
 import httpx
-import json
+import sys
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from app.carbon import (
+    inject, hero, kpi_card, badge, section_label,
+    BG, LAYER_01, LAYER_02, BORDER,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DISABLED,
+    FONT_SANS, FONT_MONO,
+    BLUE_40, C_CRITICAL, C_WATCH, C_NORMAL, C_LOW_FLOW, C_NODATA,
+)
 
 st.set_page_config(page_title="Meteorology — Llobregat", layout="wide")
+inject()
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 AEMET_BASE = "https://opendata.aemet.es/opendata/api"
+
+# ── Plotly dark template ───────────────────────────────────────────────────────
+DARK_LAYOUT = dict(
+    paper_bgcolor=BG,
+    plot_bgcolor=LAYER_01,
+    font=dict(family=FONT_SANS, color=TEXT_SECONDARY),
+    xaxis=dict(gridcolor=LAYER_02, linecolor=BORDER, tickcolor=TEXT_DISABLED),
+    yaxis=dict(gridcolor=LAYER_02, linecolor=BORDER, tickcolor=TEXT_DISABLED),
+)
 
 # ── API key loader ─────────────────────────────────────────────────────────────
 def _get_aemet_key() -> str:
@@ -38,7 +58,6 @@ def _get_aemet_key() -> str:
                 return tomllib.load(f).get("AEMET_API_KEY", "")
     except Exception:
         pass
-    # Streamlit Cloud secrets
     try:
         return st.secrets.get("AEMET_API_KEY", "")
     except Exception:
@@ -60,22 +79,22 @@ def load_meteo_data(station_id: str) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.read_parquet(files[-1])
 
-# ── AEMET 7-day forecast (live fetch, 30-min cache) ───────────────────────────
+# ── AEMET 7-day forecast ───────────────────────────────────────────────────────
 SKY_ICONS = {
-    "11": "☀️", "12": "🌤️", "13": "⛅", "14": "🌥️",
-    "15": "☁️", "16": "☁️", "17": "🌥️",
-    "23": "🌦️", "24": "🌧️", "25": "🌧️", "26": "🌧️",
-    "33": "🌤️", "34": "🌥️", "35": "☁️", "36": "🌥️",
-    "43": "🌦️", "44": "🌧️", "45": "🌧️", "46": "🌧️",
-    "51": "🌨️", "52": "🌨️", "53": "❄️", "54": "❄️",
-    "61": "❄️", "62": "❄️", "63": "🌨️",
-    "71": "⛈️", "72": "⛈️", "73": "⛈️",
-    "81": "🌫️", "82": "🌫️",
+    "11": "☀️",  "12": "🌤️",  "13": "⛅",  "14": "🌥️",
+    "15": "☁️",  "16": "☁️",  "17": "🌥️",
+    "23": "🌦️",  "24": "🌧️",  "25": "🌧️",  "26": "🌧️",
+    "33": "🌤️",  "34": "🌥️",  "35": "☁️",  "36": "🌥️",
+    "43": "🌦️",  "44": "🌧️",  "45": "🌧️",  "46": "🌧️",
+    "51": "🌨️",  "52": "🌨️",  "53": "❄️",   "54": "❄️",
+    "61": "❄️",   "62": "❄️",   "63": "🌨️",
+    "71": "⛈️",  "72": "⛈️",  "73": "⛈️",
+    "81": "🌫️",  "82": "🌫️",
 }
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_forecast(municipio_code: str, api_key: str) -> list[dict]:
-    """Fetch AEMET 7-day daily forecast for a municipality. Returns list of day dicts."""
+    """Fetch AEMET 7-day daily forecast for a municipality."""
     if not api_key or not municipio_code:
         return []
     try:
@@ -100,75 +119,59 @@ def fetch_forecast(municipio_code: str, api_key: str) -> list[dict]:
             fecha = str(day.get("fecha", ""))[:10]
             try:
                 dt = pd.Timestamp(fecha)
-                weekday = dt.strftime("%a")
+                weekday  = dt.strftime("%a")
                 date_str = dt.strftime("%d %b")
             except Exception:
-                weekday = fecha
+                weekday  = fecha
                 date_str = fecha
 
-            # Temperature
             temp_obj = day.get("temperatura", {})
             t_max = temp_obj.get("maxima")
             t_min = temp_obj.get("minima")
 
-            # Precipitation probability (00-24 period)
-            prob_list = day.get("probPrecipitacion", [])
-            precip_pct = None
+            prob_list   = day.get("probPrecipitacion", [])
+            precip_pct  = None
             for p in prob_list:
                 if p.get("periodo") == "00-24":
-                    precip_pct = p.get("value")
-                    break
+                    precip_pct = p.get("value"); break
             if precip_pct is None and prob_list:
                 precip_pct = prob_list[0].get("value")
 
-            # Precipitation amount
             prec_list = day.get("precipitacion", [])
-            prec_mm = None
+            prec_mm   = None
             for p in prec_list:
                 if p.get("periodo") == "00-24":
-                    prec_mm = p.get("value")
-                    break
+                    prec_mm = p.get("value"); break
             if prec_mm is None and prec_list:
                 prec_mm = prec_list[0].get("value")
 
-            # Sky state
             sky_list = day.get("estadoCielo", [])
-            sky_code = None
-            sky_desc = ""
+            sky_code = sky_desc = ""
             for sk in sky_list:
                 if sk.get("periodo") == "00-24":
                     sky_code = str(sk.get("value", ""))
-                    sky_desc = sk.get("descripcion", "")
-                    break
+                    sky_desc = sk.get("descripcion", ""); break
             if not sky_code and sky_list:
                 sky_code = str(sky_list[0].get("value", ""))
                 sky_desc = sky_list[0].get("descripcion", "")
             sky_icon = SKY_ICONS.get(sky_code, "🌡️")
 
-            # Wind
             wind_list = day.get("viento", [])
-            wind_spd = None
-            wind_dir = ""
+            wind_spd = wind_dir = None
             for w in wind_list:
                 if w.get("periodo") == "00-24":
                     wind_spd = w.get("velocidad")
-                    wind_dir = w.get("direccion", "")
-                    break
+                    wind_dir = w.get("direccion", ""); break
             if wind_spd is None and wind_list:
                 wind_spd = wind_list[0].get("velocidad")
                 wind_dir = wind_list[0].get("direccion", "")
 
             days.append({
-                "weekday":    weekday,
-                "date_str":   date_str,
-                "sky_icon":   sky_icon,
-                "sky_desc":   sky_desc,
-                "t_max":      t_max,
-                "t_min":      t_min,
-                "precip_pct": precip_pct,
-                "prec_mm":    prec_mm,
-                "wind_spd":   wind_spd,
-                "wind_dir":   wind_dir,
+                "weekday": weekday, "date_str": date_str,
+                "sky_icon": sky_icon, "sky_desc": sky_desc,
+                "t_max": t_max, "t_min": t_min,
+                "precip_pct": precip_pct, "prec_mm": prec_mm,
+                "wind_spd": wind_spd, "wind_dir": wind_dir,
             })
         return days[:7]
     except Exception:
@@ -180,13 +183,11 @@ if not meteo_stations:
     st.warning("No meteo stations configured.")
     st.stop()
 
-# BCN-first
 BASIN_ORDER = {"lower_llobregat": 0, "anoia": 1, "middle_llobregat": 2,
                "cardener": 3, "upper_llobregat": 4}
 sorted_stations = sorted(meteo_stations,
     key=lambda s: (BASIN_ORDER.get(s.get("sub_basin", "other"), 5), s.get("priority", 9)))
 
-# Collect latest for each station
 station_latest = {}
 for mt in meteo_stations:
     df = load_meteo_data(mt["id"])
@@ -195,58 +196,48 @@ for mt in meteo_stations:
         continue
     row = df.sort_values("timestamp").iloc[-1]
     station_latest[mt["id"]] = {
-        "temp":   float(row.get("temp_c",    np.nan)) if not pd.isna(row.get("temp_c"))    else np.nan,
-        "precip": float(row.get("precip_mm", np.nan)) if not pd.isna(row.get("precip_mm")) else np.nan,
+        "temp":   float(row.get("temp_c",        np.nan)) if not pd.isna(row.get("temp_c"))        else np.nan,
+        "precip": float(row.get("precip_mm",     np.nan)) if not pd.isna(row.get("precip_mm"))     else np.nan,
         "wind":   float(row.get("wind_speed_ms", np.nan)) if not pd.isna(row.get("wind_speed_ms")) else np.nan,
     }
 
-active_stations = [m for m in meteo_stations if not np.isnan(station_latest[m["id"]]["temp"])]
-n_active = len(active_stations)
+n_active = sum(1 for m in meteo_stations if not np.isnan(station_latest[m["id"]]["temp"]))
 
-# ── Hero banner ────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<div style="background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);
-            padding:1.4rem 2rem;border-radius:12px;margin-bottom:0.8rem">
-  <h1 style="color:white;margin:0;font-size:1.8rem">⛅ Meteorology</h1>
-  <p style="color:#90e0ef;margin:0.3rem 0 0;font-size:0.9rem">
-    {n_active} AEMET stations active · Llobregat watershed
-  </p>
-</div>
-""", unsafe_allow_html=True)
+# ── Hero banner (Carbon) ───────────────────────────────────────────────────────
+st.markdown(hero(
+    title="Meteorology",
+    subtitle=f"{n_active} AEMET stations active · Llobregat watershed",
+), unsafe_allow_html=True)
 
 # ── Station KPI strip ──────────────────────────────────────────────────────────
-active_sorted = [m for m in sorted_stations
-                 if not np.isnan(station_latest[m["id"]]["temp"])]
+active_sorted = [m for m in sorted_stations if not np.isnan(station_latest[m["id"]]["temp"])]
 if active_sorted:
     cols = st.columns(len(active_sorted))
     for i, mt in enumerate(active_sorted):
         info = station_latest[mt["id"]]
         with cols[i]:
-            temp_s  = f"{info['temp']:.1f} °C"  if not np.isnan(info["temp"])   else "—"
-            prec_s  = f"{info['precip']:.1f} mm" if not np.isnan(info["precip"]) else "—"
-            wind_s  = f"{info['wind']:.1f} m/s"  if not np.isnan(info["wind"])   else "—"
-            st.markdown(f"""
-<div style="background:#0d1b2a;border:2px solid #2ca02c;border-radius:10px;
-            padding:0.7rem;text-align:center">
-  <div style="color:#90e0ef;font-size:0.65rem;font-weight:700;text-transform:uppercase">
-    ⛅ {mt['name']}</div>
-  <div style="color:white;font-size:1.3rem;font-weight:800;margin:0.2rem 0">{temp_s}</div>
-  <div style="color:#aaa;font-size:0.7rem">💧 {prec_s} &nbsp; 🌬️ {wind_s}</div>
-</div>""", unsafe_allow_html=True)
+            temp_s = f"{info['temp']:.1f} °C"   if not np.isnan(info["temp"])   else "—"
+            prec_s = f"{info['precip']:.1f} mm"  if not np.isnan(info["precip"]) else "—"
+            wind_s = f"{info['wind']:.1f} m/s"   if not np.isnan(info["wind"])   else "—"
+            st.markdown(kpi_card(
+                label=f"⛅ {mt['name']}",
+                value=temp_s,
+                trend=f"💧 {prec_s}  🌬️ {wind_s}",
+                color=C_NORMAL,
+            ), unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Station selector ───────────────────────────────────────────────────────────
-# BCN-closest station first in the dropdown
 station_options = {s["name"]: s["id"] for s in sorted_stations}
-selected_name = st.selectbox("Select meteorological station for detail view",
-                              list(station_options.keys()))
-selected_id   = station_options[selected_name]
-selected_meta = next(s for s in meteo_stations if s["id"] == selected_id)
-municipio_code = selected_meta.get("municipio_code", "")
+selected_name   = st.selectbox("Select meteorological station for detail view",
+                                list(station_options.keys()))
+selected_id     = station_options[selected_name]
+selected_meta   = next(s for s in meteo_stations if s["id"] == selected_id)
+municipio_code  = selected_meta.get("municipio_code", "")
 
 # ── 7-day forecast section ─────────────────────────────────────────────────────
-st.subheader(f"📅 7-day forecast — {selected_name} area")
+st.markdown(section_label(f"7-day forecast — {selected_name} area"), unsafe_allow_html=True)
 
 aemet_key = _get_aemet_key()
 if not aemet_key:
@@ -258,10 +249,9 @@ else:
         forecast_days = fetch_forecast(municipio_code, aemet_key)
 
     if not forecast_days:
-        st.warning("Forecast data unavailable for this station (API may be rate-limited). "
-                   "Historical data shown below.")
+        st.warning("Forecast data unavailable (API may be rate-limited). Historical data shown below.")
     else:
-        # Forecast day cards
+        # Day cards (Carbon flat style)
         day_cols = st.columns(len(forecast_days))
         for i, day in enumerate(forecast_days):
             t_max = day["t_max"]
@@ -275,31 +265,30 @@ else:
             pct_s   = f"{pct}%"   if pct   is not None else ""
             prec_s  = f"{prec} mm" if prec is not None and float(prec) > 0 else ""
 
-            # Color by temperature max
+            # Temp-based accent colour (still uses Carbon colours)
             if t_max is not None:
-                t_color = ("#c0392b" if t_max >= 30 else
-                           "#e67e22" if t_max >= 22 else
-                           "#2ca02c" if t_max >= 15 else
-                           "#0096c7" if t_max >= 8  else "#8e44ad")
+                t_color = (C_CRITICAL if t_max >= 30 else
+                           C_WATCH    if t_max >= 22 else
+                           C_NORMAL   if t_max >= 15 else
+                           BLUE_40    if t_max >= 8  else C_LOW_FLOW)
             else:
-                t_color = "#95a5a6"
+                t_color = C_NODATA
 
             with day_cols[i]:
                 st.markdown(f"""
-<div style="background:#0d1b2a;border:1px solid #1e3a5f;border-radius:10px;
-            padding:0.6rem;text-align:center;font-family:sans-serif">
-  <div style="color:#90e0ef;font-size:0.7rem;font-weight:700">{day['weekday']}</div>
-  <div style="color:#aaa;font-size:0.65rem">{day['date_str']}</div>
-  <div style="font-size:1.8rem;margin:0.3rem 0">{sky}</div>
-  <div style="color:{t_color};font-size:1.1rem;font-weight:800">{t_max_s}</div>
-  <div style="color:#6baed6;font-size:0.85rem">{t_min_s}</div>
-  <div style="color:#48cae4;font-size:0.7rem;margin-top:0.3rem">
-    {'💧 ' + pct_s if pct_s else ''}
-  </div>
-  <div style="color:#90e0ef;font-size:0.65rem">{prec_s}</div>
+<div style="background:{LAYER_01};border-bottom:3px solid {t_color};
+            padding:10px 8px;text-align:center;font-family:{FONT_SANS}">
+  <div style="color:{TEXT_SECONDARY};font-size:11px;font-weight:600;
+              text-transform:uppercase;letter-spacing:0.06em">{day['weekday']}</div>
+  <div style="color:{TEXT_DISABLED};font-size:10px;margin-top:1px">{day['date_str']}</div>
+  <div style="font-size:1.8rem;margin:6px 0;line-height:1">{sky}</div>
+  <div style="font-family:{FONT_MONO};color:{t_color};font-size:1.1rem;font-weight:400">{t_max_s}</div>
+  <div style="font-family:{FONT_MONO};color:{TEXT_SECONDARY};font-size:0.85rem">{t_min_s}</div>
+  <div style="color:{BLUE_40};font-size:10px;margin-top:6px">{'💧 ' + pct_s if pct_s else ''}</div>
+  <div style="color:{TEXT_DISABLED};font-size:10px">{prec_s}</div>
 </div>""", unsafe_allow_html=True)
 
-        # Temperature range chart from forecast
+        # Forecast temperature range + precip chart
         dates   = [d["date_str"] for d in forecast_days if d["t_max"] is not None]
         t_maxes = [d["t_max"]    for d in forecast_days if d["t_max"] is not None]
         t_mins  = [d["t_min"]    for d in forecast_days if d["t_min"] is not None]
@@ -307,32 +296,36 @@ else:
             fig_fc = go.Figure()
             fig_fc.add_trace(go.Scatter(
                 x=dates, y=t_maxes, name="Max temp",
-                line=dict(color="rgba(214,39,40,0.5)", width=1), showlegend=False,
+                line=dict(color="rgba(218,30,40,0.5)", width=1), showlegend=False,
             ))
             fig_fc.add_trace(go.Scatter(
                 x=dates, y=t_mins, name="Temp range",
-                fill="tonexty", fillcolor="rgba(214,39,40,0.12)",
-                line=dict(color="rgba(214,39,40,0.5)", width=1),
+                fill="tonexty", fillcolor="rgba(218,30,40,0.12)",
+                line=dict(color="rgba(218,30,40,0.5)", width=1),
             ))
             fig_fc.add_trace(go.Bar(
                 x=[d["date_str"] for d in forecast_days if d.get("prec_mm") is not None],
                 y=[float(d["prec_mm"]) for d in forecast_days if d.get("prec_mm") is not None],
                 name="Precip (mm)", yaxis="y2",
-                marker_color="rgba(0,119,182,0.6)",
+                marker_color=f"rgba(120,169,255,0.65)",
             ))
             fig_fc.update_layout(
-                yaxis=dict(title="Temperature (°C)"),
-                yaxis2=dict(title="Precip (mm)", overlaying="y", side="right", showgrid=False),
-                height=300, margin=dict(t=20, b=40), template="plotly_white",
+                **DARK_LAYOUT,
+                yaxis=dict(**DARK_LAYOUT["yaxis"], title="Temperature (°C)"),
+                yaxis2=dict(title="Precip (mm)", overlaying="y", side="right",
+                            showgrid=False, tickcolor=TEXT_DISABLED,
+                            tickfont=dict(color=TEXT_SECONDARY)),
+                height=300, margin=dict(t=20, b=40),
                 hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                            font=dict(color=TEXT_SECONDARY)),
             )
             st.plotly_chart(fig_fc, use_container_width=True)
 
 st.divider()
 
 # ── Historical charts ──────────────────────────────────────────────────────────
-st.subheader(f"📊 Historical observations — {selected_name}")
+st.markdown(section_label(f"Historical observations — {selected_name}"), unsafe_allow_html=True)
 
 df = load_meteo_data(selected_id)
 if df.empty:
@@ -347,8 +340,8 @@ df = df.sort_values("ts")
 
 latest = df.iloc[-1]
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Latest temp",   f"{latest.get('temp_c',    np.nan):.1f} °C" if not pd.isna(latest.get("temp_c"))    else "—")
-c2.metric("Latest precip", f"{latest.get('precip_mm', np.nan):.1f} mm" if not pd.isna(latest.get("precip_mm")) else "—")
+c1.metric("Latest temp",   f"{latest.get('temp_c',    np.nan):.1f} °C"  if not pd.isna(latest.get("temp_c"))        else "—")
+c2.metric("Latest precip", f"{latest.get('precip_mm', np.nan):.1f} mm"  if not pd.isna(latest.get("precip_mm"))     else "—")
 c3.metric("Wind speed",    f"{latest.get('wind_speed_ms', np.nan):.1f} m/s" if not pd.isna(latest.get("wind_speed_ms")) else "—")
 c4.metric("Humidity",      f"{latest.get('humidity_pct', np.nan):.0f}%" if not pd.isna(latest.get("humidity_pct")) else "—")
 
@@ -358,23 +351,25 @@ if temp_cols and not df[temp_cols].isna().all().all():
     fig_t = go.Figure()
     if "temp_max_c" in df.columns and "temp_min_c" in df.columns:
         fig_t.add_trace(go.Scatter(
-            x=df["ts"], y=df["temp_max_c"], name="Max", showlegend=False,
-            line=dict(color="rgba(214,39,40,0.3)", width=1),
+            x=df["ts"], y=df["temp_max_c"], name="Max",
+            showlegend=False, line=dict(color="rgba(218,30,40,0.3)", width=1),
         ))
         fig_t.add_trace(go.Scatter(
             x=df["ts"], y=df["temp_min_c"], name="Temp range",
-            fill="tonexty", fillcolor="rgba(214,39,40,0.1)",
-            line=dict(color="rgba(214,39,40,0.3)", width=1),
+            fill="tonexty", fillcolor="rgba(218,30,40,0.08)",
+            line=dict(color="rgba(218,30,40,0.3)", width=1),
         ))
     if "temp_c" in df.columns:
         fig_t.add_trace(go.Scatter(
-            x=df["ts"], y=df["temp_c"], name="Mean temperature",
-            line=dict(color="#d62728", width=2.5),
+            x=df["ts"], y=df["temp_c"], name="Mean temp",
+            line=dict(color=C_CRITICAL, width=2),
         ))
     fig_t.update_layout(
+        **DARK_LAYOUT,
         yaxis_title="Temperature (°C)", xaxis_title="Time",
-        height=300, margin=dict(t=20, b=40), hovermode="x unified", template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=300, margin=dict(t=20, b=40), hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    font=dict(color=TEXT_SECONDARY)),
     )
     st.plotly_chart(fig_t, use_container_width=True)
 
@@ -383,26 +378,35 @@ if "precip_mm" in df.columns and not df["precip_mm"].isna().all():
     fig_p = go.Figure()
     fig_p.add_trace(go.Bar(
         x=df["ts"], y=df["precip_mm"], name="Daily precip",
-        marker_color="#023e8a", opacity=0.8,
+        marker_color=BLUE_40, opacity=0.8,
     ))
     fig_p.add_trace(go.Scatter(
         x=df["ts"], y=df["precip_mm"].cumsum(), name="Cumulative",
-        line=dict(color="#e63946", width=2), yaxis="y2",
+        line=dict(color=C_CRITICAL, width=2), yaxis="y2",
     ))
     fig_p.update_layout(
-        yaxis=dict(title="Daily precip (mm)"),
-        yaxis2=dict(title="Cumulative (mm)", overlaying="y", side="right", showgrid=False),
-        height=320, margin=dict(t=20, b=40), hovermode="x unified", template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        **DARK_LAYOUT,
+        yaxis=dict(**DARK_LAYOUT["yaxis"], title="Daily precip (mm)"),
+        yaxis2=dict(title="Cumulative (mm)", overlaying="y", side="right",
+                    showgrid=False, tickfont=dict(color=TEXT_SECONDARY)),
+        height=320, margin=dict(t=20, b=40), hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    font=dict(color=TEXT_SECONDARY)),
     )
     st.plotly_chart(fig_p, use_container_width=True)
 
 # Wind
 if "wind_speed_ms" in df.columns and not df["wind_speed_ms"].isna().all():
-    fig_w = px.line(df, x="ts", y="wind_speed_ms",
-                    labels={"ts": "Time", "wind_speed_ms": "Wind speed (m/s)"},
-                    color_discrete_sequence=["#2ca02c"])
-    fig_w.update_layout(height=250, margin=dict(t=20, b=40))
+    fig_w = go.Figure(go.Scatter(
+        x=df["ts"], y=df["wind_speed_ms"], mode="lines", name="Wind speed",
+        line=dict(color=C_NORMAL, width=2),
+        hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.1f} m/s</b><extra></extra>",
+    ))
+    fig_w.update_layout(
+        **DARK_LAYOUT,
+        yaxis_title="Wind speed (m/s)", xaxis_title="Time",
+        height=250, margin=dict(t=20, b=40),
+    )
     st.plotly_chart(fig_w, use_container_width=True)
 
-st.caption("⚠️ Historical data from cache only · Forecast: AEMET OpenData (live)")
+st.caption("⚠️ Historical data from cache only · Forecast: AEMET OpenData (live, 30 min cache)")
