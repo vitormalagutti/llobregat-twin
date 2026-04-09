@@ -1,6 +1,10 @@
 """
 Page 1 — Overview: Watershed Map + System Status
-IBM Carbon Design System — Gray 100 dark theme
+
+Tabs:
+  🗺️ Watershed Map  — Folium with watershed polygon, river paths, custom
+                       station icons (KPI card style), satellite/topo/clean tiles
+  📋 Status Table   — full status for all stations
 """
 import streamlit as st
 import pandas as pd
@@ -9,81 +13,40 @@ from streamlit_folium import st_folium
 from pathlib import Path
 import yaml
 import numpy as np
-import sys
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from app.carbon import (
-    inject, hero, kpi_card, map_kpi, badge, section_label,
-    status_color, status_label,
-    BG, LAYER_01, LAYER_02, BORDER,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DISABLED,
-    FONT_SANS, FONT_MONO,
-    BLUE_40, C_CRITICAL, C_WATCH, C_NORMAL, C_LOW_FLOW, C_NODATA,
-)
+import json
 
 st.set_page_config(page_title="Overview — Llobregat", layout="wide")
-inject()
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
+SHPS_DIR   = Path(__file__).parent.parent.parent / "shps"
 
-# ── Watershed & river geometry (approximate, hardcoded) ────────────────────────
-WATERSHED_GEOJSON = {
-    "type": "FeatureCollection",
-    "features": [{
-        "type": "Feature",
-        "properties": {"name": "Llobregat Watershed"},
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [[
-                [1.73, 42.22], [1.62, 42.08], [1.52, 41.98], [1.50, 41.80],
-                [1.55, 41.62], [1.65, 41.48], [1.78, 41.37], [1.95, 41.28],
-                [2.10, 41.30], [2.18, 41.40], [2.14, 41.55], [2.03, 41.62],
-                [1.97, 41.78], [1.92, 41.97], [2.00, 42.12], [1.98, 42.23],
-                [1.73, 42.22]
-            ]]
-        }
-    }]
-}
+# ── Real shapefile geometry (pre-converted to GeoJSON) ─────────────────────────
+@st.cache_data(ttl=86400)
+def load_geojson(name: str) -> dict:
+    p = SHPS_DIR / f"{name}.geojson"
+    if not p.exists():
+        return {"type": "FeatureCollection", "features": []}
+    with open(p) as f:
+        return json.load(f)
 
-RIVERS_GEOJSON = {
-    "type": "FeatureCollection",
-    "features": [
-        {
-            "type": "Feature",
-            "properties": {"name": "Llobregat", "type": "main"},
-            "geometry": {
-                "type": "LineString",
-                "coordinates": [
-                    [1.97, 42.21], [1.88, 42.12], [1.878, 42.08], [1.880, 41.86],
-                    [1.858, 41.65], [1.858, 41.55], [1.948, 41.47], [1.933, 41.48],
-                    [2.023, 41.39], [2.047, 41.35], [2.070, 41.30]
-                ]
-            }
-        },
-        {
-            "type": "Feature",
-            "properties": {"name": "Cardener", "type": "tributary"},
-            "geometry": {
-                "type": "LineString",
-                "coordinates": [
-                    [1.583, 42.10], [1.606, 41.96], [1.696, 41.92],
-                    [1.763, 41.81], [1.830, 41.73], [1.858, 41.65]
-                ]
-            }
-        },
-        {
-            "type": "Feature",
-            "properties": {"name": "Anoia", "type": "tributary"},
-            "geometry": {
-                "type": "LineString",
-                "coordinates": [
-                    [1.788, 41.44], [1.850, 41.46], [1.929, 41.48], [1.948, 41.47]
-                ]
-            }
-        }
+def _watershed_geojson() -> dict:
+    """Return only the real watershed polygon (>100 pts), not bounding boxes."""
+    raw = load_geojson("Cuenca_Llobregat")
+    real_features = [
+        feat for feat in raw.get("features", [])
+        if feat["geometry"]["type"] == "Polygon"
+        and len(feat["geometry"]["coordinates"][0]) > 100
     ]
-}
+    if not real_features:
+        return raw  # fallback: return everything
+    # Add a human-readable name property for the tooltip
+    for feat in real_features:
+        feat["properties"]["name"] = "Llobregat Watershed"
+    return {"type": "FeatureCollection", "features": real_features}
+
+WATERSHED_GEOJSON = _watershed_geojson()
+RIVERS_GEOJSON    = load_geojson("Drenaje")
 
 # ── Data helpers ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
@@ -121,20 +84,21 @@ res_low     = thresholds.get("reservoir_alert_pct", {}).get("low", 40)
 
 # ── Alert helpers ──────────────────────────────────────────────────────────────
 def gauge_alert(flow):
-    if pd.isna(flow):                              return "no_data",  C_NODATA
-    if flood_warn  and flow >= flood_warn:         return "critical", C_CRITICAL
-    if flood_watch and flow >= flood_watch:        return "watch",    C_WATCH
-    if low_flow    and flow <= low_flow:           return "low_flow", C_LOW_FLOW
-    return "normal", C_NORMAL
+    if pd.isna(flow):                              return "no_data",  "#95a5a6"
+    if flood_warn  and flow >= flood_warn:         return "critical", "#c0392b"
+    if flood_watch and flow >= flood_watch:        return "watch",    "#e67e22"
+    if low_flow    and flow <= low_flow:           return "low_flow", "#8e44ad"
+    return "normal", "#27ae60"
 
 def res_alert(pct):
-    if np.isnan(pct):           return "no_data",  C_NODATA
-    if pct <= res_crit:         return "critical", C_CRITICAL
-    if pct <= res_low:          return "watch",    C_WATCH
-    if pct >= 80:               return "full",     C_NORMAL
-    return "normal", BLUE_40
+    if np.isnan(pct):           return "no_data",  "#95a5a6"
+    if pct <= res_crit:         return "critical", "#c0392b"
+    if pct <= res_low:          return "watch",    "#e67e22"
+    if pct >= 80:               return "full",     "#27ae60"
+    return "normal", "#0096c7"
 
 # ── Collect latest values (BCN-first: sort lower → upper) ─────────────────────
+# Sort gauges: lower_llobregat first (closest to BCN), then others
 BASIN_ORDER = {"lower_llobregat": 0, "anoia": 1, "middle_llobregat": 2,
                "cardener": 3, "upper_llobregat": 4, "other": 5}
 sorted_gauges = sorted(gauge_stations,
@@ -189,21 +153,39 @@ sjd_trend = gauge_latest[sjd["id"]]["trend"] if sjd else "→"
 
 n_active = sum(1 for v in gauge_latest.values() if not np.isnan(v["flow"]))
 
-# ── Hero banner (Carbon) ───────────────────────────────────────────────────────
+# ── Hero banner ────────────────────────────────────────────────────────────────
 sjd_flow_str = f"{sjd_flow:.1f} m³/s" if not np.isnan(sjd_flow) else "—"
 sys_pct_str  = f"{sys_pct:.1f}%" if not np.isnan(sys_pct) else "—"
-_, sjd_col   = gauge_alert(sjd_flow)
 
-st.markdown(hero(
-    title="Llobregat Watershed",
-    subtitle=f"Live hydrological monitoring · {n_active} of {len(gauge_stations)} gauges active",
-    right_label="Sant Joan Despí",
-    right_value=f"{sjd_flow_str} {sjd_trend}",
-    right_label2="Reservoir system",
-    right_value2=sys_pct_str,
-), unsafe_allow_html=True)
+st.markdown(f"""
+<div style="background:linear-gradient(135deg,#023e8a 0%,#0096c7 60%,#48cae4 100%);
+            padding:1.4rem 2rem;border-radius:12px;margin-bottom:1rem;
+            display:flex;align-items:center;justify-content:space-between">
+  <div>
+    <h2 style="color:white;margin:0;font-size:1.8rem">💧 Llobregat Watershed</h2>
+    <p style="color:#caf0f8;margin:0.2rem 0 0;font-size:0.9rem">
+      Live hydrological monitoring · {n_active} of {len(gauge_stations)} gauges active
+    </p>
+  </div>
+  <div style="display:flex;gap:2rem;text-align:center">
+    <div>
+      <div style="color:#caf0f8;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em">
+        Sant Joan Despí
+      </div>
+      <div style="color:white;font-size:1.6rem;font-weight:800">{sjd_flow_str} {sjd_trend}</div>
+    </div>
+    <div>
+      <div style="color:#caf0f8;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em">
+        Reservoir system
+      </div>
+      <div style="color:white;font-size:1.6rem;font-weight:800">{sys_pct_str}</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── KPI strip (BCN-first) ──────────────────────────────────────────────────────
+# Show top 6 BCN-area stations
 top_stations = sorted_gauges[:6]
 kpi_cols = st.columns(6)
 for i, s in enumerate(top_stations):
@@ -213,12 +195,13 @@ for i, s in enumerate(top_stations):
     flow_str   = f"{flow:.1f} m³/s" if not np.isnan(flow) else "—"
     short_name = s["name"].split(" (")[0][:16]
     with kpi_cols[i]:
-        st.markdown(kpi_card(
-            label=short_name,
-            value=flow_str,
-            trend=info["trend"],
-            color=color,
-        ), unsafe_allow_html=True)
+        st.markdown(f"""
+<div style="background:#0d1b2a;border:2px solid {color};border-radius:10px;
+            padding:0.6rem;text-align:center">
+  <div style="color:#90e0ef;font-size:0.65rem;font-weight:700;text-transform:uppercase">{short_name}</div>
+  <div style="color:white;font-size:1.2rem;font-weight:800;margin:0.2rem 0">{flow_str}</div>
+  <div style="color:{color};font-size:0.85rem">{info['trend']}</div>
+</div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -240,39 +223,35 @@ with tab_map:
         tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
         attr="OpenTopoMap", name="🗻 Topographic", overlay=False, control=True,
     ).add_to(m)
-    folium.TileLayer("CartoDB dark_matter", name="🗺️ Dark", overlay=False, control=True).add_to(m)
+    folium.TileLayer("CartoDB positron", name="🗺️ Clean", overlay=False, control=True).add_to(m)
 
     # ── Watershed polygon ──
     folium.GeoJson(
         WATERSHED_GEOJSON,
         name="🌍 Watershed boundary",
         style_function=lambda _: {
-            "fillColor":   BLUE_40,
+            "fillColor":   "#0096c7",
             "fillOpacity": 0.07,
-            "color":       BLUE_40,
+            "color":       "#0096c7",
             "weight":      2,
             "dashArray":   "6 4",
         },
         tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=[""]),
     ).add_to(m)
 
-    # ── River paths ──
-    def river_style(feature):
-        t = feature["properties"].get("type", "tributary")
-        return {
-            "color":   "#4589ff" if t == "main" else "#78a9ff",
-            "weight":  3 if t == "main" else 1.8,
-            "opacity": 0.80,
-        }
-
+    # ── River paths (real drainage network from Drenaje shapefile) ──
     folium.GeoJson(
         RIVERS_GEOJSON,
         name="🌊 River network",
-        style_function=river_style,
-        tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=[""]),
+        style_function=lambda _: {
+            "color":   "#1e90ff",
+            "weight":  1.8,
+            "opacity": 0.75,
+        },
+        tooltip="Llobregat drainage network",
     ).add_to(m)
 
-    # ── Gauge station markers (Carbon KPI card style) ──
+    # ── Gauge station markers (KPI card style) ──
     gauge_fg = folium.FeatureGroup(name="💧 Gauge stations", show=True)
     for s in gauge_stations:
         info = gauge_latest[s["id"]]
@@ -283,22 +262,29 @@ with tab_map:
         short_name = s["name"].split(" (")[0][:16]
         river_name = s.get("river", "")
 
-        card_html = map_kpi(label=f"💧 {short_name}",
-                            value=f"{flow_str} m³/s",
-                            trend=trend, color=color)
+        # KPI card DivIcon
+        card_html = f"""
+        <div style="background:#0d1b2a;border:2px solid {color};border-radius:8px;
+                    padding:4px 8px;min-width:88px;text-align:center;white-space:nowrap;
+                    box-shadow:2px 3px 8px rgba(0,0,0,0.7);font-family:sans-serif">
+          <div style="color:#90e0ef;font-size:9px;font-weight:700;text-transform:uppercase;
+                      letter-spacing:0.04em">💧 {short_name}</div>
+          <div style="color:white;font-size:15px;font-weight:900;margin:1px 0;
+                      line-height:1">{flow_str} m³/s</div>
+          <div style="color:{color};font-size:11px">{trend}</div>
+        </div>"""
 
         popup_html = f"""
-        <div style="font-family:{FONT_SANS};min-width:180px;background:{LAYER_01};
-                    padding:8px;border-top:3px solid {color}">
-          <b style="font-size:13px;color:{TEXT_PRIMARY}">{s['name']}</b><br>
-          <span style="color:{TEXT_SECONDARY};font-size:11px">{river_name} · {s.get('sub_basin','').replace('_',' ').title()}</span>
-          <hr style="border-color:{BORDER};margin:6px 0">
-          <table style="font-size:12px;width:100%;color:{TEXT_PRIMARY}">
-            <tr><td style="color:{TEXT_SECONDARY}">Flow</td><td>{flow_str} m³/s {trend}</td></tr>
-            <tr><td style="color:{TEXT_SECONDARY}">Stage</td>
+        <div style="font-family:sans-serif;min-width:180px">
+          <b style="font-size:13px">{s['name']}</b><br>
+          <span style="color:grey;font-size:11px">{river_name} · {s.get('sub_basin','').replace('_',' ').title()}</span>
+          <hr style="margin:4px 0">
+          <table style="font-size:12px;width:100%">
+            <tr><td><b>Flow</b></td><td>{flow_str} m³/s {trend}</td></tr>
+            <tr><td><b>Stage</b></td>
                 <td>{"%.3f m" % info['level'] if not np.isnan(info['level']) else "—"}</td></tr>
-            <tr><td style="color:{TEXT_SECONDARY}">Status</td>
-                <td><span style="color:{color}">{status_label(alert_lvl)}</span></td></tr>
+            <tr><td><b>Status</b></td>
+                <td><span style="color:{color}">{alert_lvl.replace('_',' ').title()}</span></td></tr>
           </table>
         </div>"""
 
@@ -306,8 +292,8 @@ with tab_map:
             location=[s["lat"], s["lon"]],
             icon=folium.DivIcon(
                 html=card_html,
-                icon_size=(110, 52),
-                icon_anchor=(55, 26),
+                icon_size=(95, 58),
+                icon_anchor=(47, 29),
             ),
             popup=folium.Popup(popup_html, max_width=220),
         ).add_to(gauge_fg)
@@ -324,20 +310,26 @@ with tab_map:
         vol_str = f"{vol:.1f} hm³" if not np.isnan(vol) else "—"
         short   = r["name"][:14]
 
-        card_html = map_kpi(label=f"🏔️ {short}",
-                            value=pct_str,
-                            trend=vol_str, color=color)
+        card_html = f"""
+        <div style="background:#03045e;border:2px solid {color};border-radius:8px;
+                    padding:4px 8px;min-width:80px;text-align:center;white-space:nowrap;
+                    box-shadow:2px 3px 8px rgba(0,0,0,0.7);font-family:sans-serif">
+          <div style="color:#90e0ef;font-size:9px;font-weight:700;text-transform:uppercase">
+            🏔️ {short}</div>
+          <div style="color:white;font-size:15px;font-weight:900;margin:1px 0;line-height:1">
+            {pct_str}</div>
+          <div style="color:grey;font-size:9px">{vol_str}</div>
+        </div>"""
 
         popup_html = f"""
-        <div style="font-family:{FONT_SANS};min-width:180px;background:{LAYER_01};
-                    padding:8px;border-top:3px solid {color}">
-          <b style="font-size:13px;color:{TEXT_PRIMARY}">🏔️ {r['name']}</b><br>
-          <span style="color:{TEXT_SECONDARY};font-size:11px">{r.get('river','')} reservoir</span>
-          <hr style="border-color:{BORDER};margin:6px 0">
-          <table style="font-size:12px;width:100%;color:{TEXT_PRIMARY}">
-            <tr><td style="color:{TEXT_SECONDARY}">Storage</td><td>{pct_str}</td></tr>
-            <tr><td style="color:{TEXT_SECONDARY}">Volume</td><td>{vol_str}</td></tr>
-            <tr><td style="color:{TEXT_SECONDARY}">Capacity</td>
+        <div style="font-family:sans-serif;min-width:180px">
+          <b style="font-size:13px">🏔️ {r['name']}</b><br>
+          <span style="color:grey;font-size:11px">{r.get('river','')} reservoir</span>
+          <hr style="margin:4px 0">
+          <table style="font-size:12px;width:100%">
+            <tr><td><b>Storage</b></td><td>{pct_str}</td></tr>
+            <tr><td><b>Volume</b></td><td>{vol_str}</td></tr>
+            <tr><td><b>Capacity</b></td>
                 <td>{r.get('capacity_hm3','?')} hm³</td></tr>
           </table>
         </div>"""
@@ -346,8 +338,8 @@ with tab_map:
             location=[r["lat"], r["lon"]],
             icon=folium.DivIcon(
                 html=card_html,
-                icon_size=(95, 52),
-                icon_anchor=(47, 26),
+                icon_size=(85, 58),
+                icon_anchor=(42, 29),
             ),
             popup=folium.Popup(popup_html, max_width=220),
         ).add_to(res_fg)
@@ -363,25 +355,31 @@ with tab_map:
         prec_str = f"{prec:.1f} mm" if not np.isnan(prec) else "—"
         short    = mt["name"][:12]
 
-        card_html = map_kpi(label=f"⛅ {short}",
-                            value=temp_str,
-                            trend=f"💧 {prec_str}", color=C_NORMAL)
+        card_html = f"""
+        <div style="background:#1a1a2e;border:2px solid #2ca02c;border-radius:8px;
+                    padding:4px 8px;min-width:75px;text-align:center;white-space:nowrap;
+                    box-shadow:2px 3px 8px rgba(0,0,0,0.7);font-family:sans-serif">
+          <div style="color:#90e0ef;font-size:9px;font-weight:700;text-transform:uppercase">
+            ⛅ {short}</div>
+          <div style="color:white;font-size:14px;font-weight:900;margin:1px 0;line-height:1">
+            {temp_str}</div>
+          <div style="color:grey;font-size:9px">💧 {prec_str}</div>
+        </div>"""
 
         popup_html = f"""
-        <div style="font-family:{FONT_SANS};background:{LAYER_01};
-                    padding:8px;border-top:3px solid {C_NORMAL}">
-          <b style="color:{TEXT_PRIMARY}">⛅ {mt['name']}</b><br>
-          <span style="color:{TEXT_SECONDARY};font-size:11px">AEMET station {mt['id']}</span>
-          <hr style="border-color:{BORDER};margin:6px 0">
-          <span style="font-size:12px;color:{TEXT_PRIMARY}">🌡️ {temp_str} &nbsp; 💧 {prec_str}</span>
+        <div style="font-family:sans-serif">
+          <b>⛅ {mt['name']}</b><br>
+          <span style="color:grey;font-size:11px">AEMET station {mt['id']}</span>
+          <hr style="margin:4px 0">
+          <span style="font-size:12px">🌡️ {temp_str} &nbsp; 💧 {prec_str}</span>
         </div>"""
 
         folium.Marker(
             location=[mt["lat"], mt["lon"]],
             icon=folium.DivIcon(
                 html=card_html,
-                icon_size=(90, 50),
-                icon_anchor=(45, 25),
+                icon_size=(80, 55),
+                icon_anchor=(40, 27),
             ),
             popup=folium.Popup(popup_html, max_width=200),
         ).add_to(meteo_fg)
@@ -391,25 +389,33 @@ with tab_map:
 
     st_folium(m, use_container_width=True, height=620, returned_objects=[])
 
-    # Legend — Carbon style
-    st.markdown(f"""
-<div style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:12px;font-family:{FONT_SANS};
-            color:{TEXT_SECONDARY};margin-top:8px;padding-top:8px;border-top:1px solid {BORDER}">
-  <span>💧 <b style="color:{TEXT_PRIMARY}">Gauge</b> — flow m³/s</span>
-  <span>🏔️ <b style="color:{TEXT_PRIMARY}">Reservoir</b> — % capacity</span>
-  <span>⛅ <b style="color:{TEXT_PRIMARY}">Weather</b> — temperature</span>
-  <span style="color:{C_CRITICAL}">● Flood warning</span>
-  <span style="color:{C_WATCH}">● Flood watch</span>
-  <span style="color:{C_NORMAL}">● Normal</span>
-  <span style="color:{C_LOW_FLOW}">● Low flow</span>
-  <span style="color:{C_NODATA}">● No data</span>
+    # Legend
+    st.markdown("""
+<div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:0.8rem;margin-top:0.5rem">
+  <span>💧 <b>Gauge station</b> — flow m³/s</span>
+  <span>🏔️ <b>Reservoir</b> — % capacity</span>
+  <span>⛅ <b>Weather station</b> — temperature</span>
+  <span style="color:#c0392b">🔴 Flood warning</span>
+  <span style="color:#e67e22">🟠 Flood watch</span>
+  <span style="color:#27ae60">🟢 Normal</span>
+  <span style="color:#8e44ad">🟣 Low flow</span>
+  <span style="color:#95a5a6">⚫ No data</span>
 </div>""", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — STATUS TABLE
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_status:
-    st.markdown(section_label("All stations — current status"), unsafe_allow_html=True)
+    st.subheader("All stations — current status")
+
+    BADGE = {
+        "critical": "🔴 Flood warning",
+        "watch":    "🟠 Watch",
+        "normal":   "🟢 Normal",
+        "low_flow": "🟣 Low flow",
+        "no_data":  "⚫ No data",
+        "full":     "🟢 Full",
+    }
 
     rows = []
     for s in sorted_gauges:
@@ -424,7 +430,7 @@ with tab_status:
             "Value":    f"{flow:.2f} m³/s" if not np.isnan(flow) else "—",
             "Stage":    f"{level:.3f} m"   if not np.isnan(level) else "—",
             "Trend":    info["trend"],
-            "Status":   status_label(alv),
+            "Status":   BADGE.get(alv, alv),
         })
 
     for r in reservoirs:
@@ -439,7 +445,7 @@ with tab_status:
             "Value":  f"{pct:.1f}%" if not np.isnan(pct) else "—",
             "Stage":  f"{vol:.1f} hm³" if not np.isnan(vol) else "—",
             "Trend":  "—",
-            "Status": status_label(alv),
+            "Status": BADGE.get(alv, alv),
         })
 
     for mt in meteo_stations:
@@ -452,7 +458,7 @@ with tab_status:
             "Value":  f"{temp:.1f} °C" if not np.isnan(temp) else "—",
             "Stage":  "—",
             "Trend":  "—",
-            "Status": "Active" if not np.isnan(temp) else "No data",
+            "Status": "🟢 Active" if not np.isnan(temp) else "⚫ No data",
         })
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
