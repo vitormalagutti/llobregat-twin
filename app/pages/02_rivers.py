@@ -16,27 +16,19 @@ from pathlib import Path
 import yaml
 import numpy as np
 import json
-import sys
-
-_APP_DIR = Path(__file__).parent.parent
-if str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
-from carbon import (inject, hero, kpi_card, map_kpi, badge,
-                    BG, LAYER_01, LAYER_02, BORDER, TEXT_PRIMARY, TEXT_SECONDARY,
-                    BLUE_40, C_CRITICAL, C_WATCH, C_NORMAL, C_LOW_FLOW, C_NODATA,
-                    FONT_MONO)
 
 st.set_page_config(page_title="River Flows — Llobregat", layout="wide")
-inject()
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 SHPS_DIR   = Path(__file__).parent.parent.parent / "shps"
 
-C_WATER  = BLUE_40
-C_FLOOD  = C_CRITICAL
-# C_WATCH, C_NORMAL, C_NODATA already imported from carbon
-C_LOW    = C_LOW_FLOW
+C_WATER  = "#0096c7"
+C_FLOOD  = "#c0392b"
+C_WATCH  = "#e67e22"
+C_LOW    = "#8e44ad"
+C_NORMAL = "#27ae60"
+C_NODATA = "#95a5a6"
 
 BASIN_ORDER = {"lower_llobregat": 0, "anoia": 1, "middle_llobregat": 2,
                "cardener": 3, "upper_llobregat": 4, "other": 5}
@@ -51,14 +43,10 @@ SUB_BASIN_LABELS = {
 
 @st.cache_data(ttl=1800)
 def load_gauge_data(station_id: str) -> pd.DataFrame:
-    """Load ALL cached parquet files for a station (up to 1 year of history)."""
     files = sorted(CACHE_DIR.glob(f"flow_{station_id}_*.parquet"))
     if not files:
         return pd.DataFrame()
-    dfs = [pd.read_parquet(f) for f in files]
-    df = pd.concat(dfs, ignore_index=True)
-    df = df.drop_duplicates(subset=["timestamp"])
-    return df.sort_values("timestamp").reset_index(drop=True)
+    return pd.read_parquet(files[-1])
 
 @st.cache_data(ttl=3600)
 def load_metadata() -> tuple[list, dict]:
@@ -79,9 +67,6 @@ flood_warn  = flow_thresh.get("flood_warning")
 flood_watch = flow_thresh.get("flood_watch")
 low_flow    = flow_thresh.get("low_flow_warning")
 
-# Per-station flow scaling factors (e.g. Balsareny raw sensor is 100x too high)
-flow_scales = {s["id"]: float(s.get("flow_scale") or 1.0) for s in stations}
-
 if not stations:
     st.warning("No gauge stations configured.")
     st.stop()
@@ -92,9 +77,9 @@ sorted_stations = sorted(stations,
 
 def flow_alert(flow):
     if pd.isna(flow):                              return "no_data",  C_NODATA
-    if flood_warn  and flow >= flood_warn:         return "critical", C_CRITICAL
+    if flood_warn  and flow >= flood_warn:         return "critical", C_FLOOD
     if flood_watch and flow >= flood_watch:        return "watch",    C_WATCH
-    if low_flow    and flow <= low_flow:           return "low_flow", C_LOW_FLOW
+    if low_flow    and flow <= low_flow:           return "low_flow", C_LOW
     return "normal", C_NORMAL
 
 def get_latest(station_id: str):
@@ -102,13 +87,9 @@ def get_latest(station_id: str):
     if df.empty:
         return np.nan, np.nan, "→"
     df2 = df.sort_values("timestamp")
-    scale = flow_scales.get(station_id, 1.0)
-    flow  = float(df2["flow_m3s"].iloc[-1]) * scale if "flow_m3s" in df2.columns else np.nan
+    flow  = float(df2["flow_m3s"].iloc[-1]) if "flow_m3s" in df2.columns else np.nan
     level = float(df2["level_m"].iloc[-1])  if "level_m"  in df2.columns else np.nan
-    if len(df2) >= 2 and "flow_m3s" in df2.columns:
-        prev = float(df2["flow_m3s"].iloc[-min(len(df2), 12)]) * scale
-    else:
-        prev = flow
+    prev  = df2["flow_m3s"].iloc[-min(len(df2), 12)] if len(df2) >= 2 else flow
     trend = "↑" if flow > prev*1.05 else ("↓" if flow < prev*0.95 else "→")
     return flow, level, trend
 
@@ -140,25 +121,44 @@ _, sys_color = {"critical": (None, C_FLOOD), "watch": (None, C_WATCH),
 
 n_active = sum(1 for v in station_latest.values() if not np.isnan(v["flow"]))
 
-st.markdown(hero(
-    title="🌊 River Flows",
-    subtitle=f"{n_active} of {len(stations)} gauge stations active · Main channel: Sant Joan Despí",
-    status_text=BADGE_LABELS[sys_alert],
-    status_color=sys_color,
-), unsafe_allow_html=True)
+st.markdown(f"""
+<div style="background:linear-gradient(135deg,#023e8a,#0077b6);
+            padding:1.4rem 2rem;border-radius:12px;margin-bottom:0.8rem;
+            display:flex;align-items:center;justify-content:space-between">
+  <div>
+    <h1 style="color:white;margin:0;font-size:1.8rem">🌊 River Flows</h1>
+    <p style="color:#90e0ef;margin:0.3rem 0 0;font-size:0.9rem">
+      {n_active} of {len(stations)} gauge stations active · Main channel: Sant Joan Despí
+    </p>
+  </div>
+  <div style="text-align:right">
+    <div style="background:{sys_color};color:white;padding:0.4rem 1rem;
+                border-radius:20px;font-weight:700;font-size:0.95rem">
+      {BADGE_LABELS[sys_alert]}
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Sant Joan Despí featured KPI ───────────────────────────────────────────────
 col_hero, col_rest = st.columns([1, 2])
 with col_hero:
     sjd_flow_str = f"{sjd_flow:.2f} m³/s" if not np.isnan(sjd_flow) else "—"
     sjd_lvl_str  = f"{sjd_level:.3f} m"   if not np.isnan(sjd_level) else "—"
-    st.markdown(kpi_card(
-        label="📍 Sant Joan Despí · Main channel",
-        value=f"{sjd_flow_str} {sjd_trend}",
-        sub=f"Stage: {sjd_lvl_str} · {BADGE_LABELS[sjd_alert]}",
-        color=sjd_color,
-        wide=True,
-    ), unsafe_allow_html=True)
+    st.markdown(f"""
+<div style="background:#0d1b2a;border:3px solid {sjd_color};border-radius:12px;
+            padding:1rem 1.2rem;text-align:center">
+  <div style="color:#90e0ef;font-size:0.75rem;font-weight:700;text-transform:uppercase;
+              letter-spacing:0.06em">📍 Sant Joan Despí · Main channel (Barcelona)</div>
+  <div style="color:white;font-size:2.2rem;font-weight:900;margin:0.4rem 0">
+    {sjd_flow_str} {sjd_trend}
+  </div>
+  <div style="color:#aaa;font-size:0.9rem">Stage: {sjd_lvl_str}</div>
+  <div style="margin-top:0.5rem">
+    <span style="background:{sjd_color};color:white;padding:3px 12px;border-radius:12px;
+                 font-size:0.8rem;font-weight:600">{BADGE_LABELS[sjd_alert]}</span>
+  </div>
+</div>""", unsafe_allow_html=True)
 
 with col_rest:
     # Mini KPI strip for other BCN-area stations
@@ -175,12 +175,13 @@ with col_rest:
             flow_s = f"{flow:.1f}" if not np.isnan(flow) else "—"
             short  = s["name"].split(" (")[0][:14]
             with c2[i]:
-                st.markdown(kpi_card(
-                    label=short,
-                    value=f"{flow_s} m³/s",
-                    trend=info["trend"],
-                    color=c,
-                ), unsafe_allow_html=True)
+                st.markdown(f"""
+<div style="background:#0d1b2a;border:2px solid {c};border-radius:8px;
+            padding:0.5rem;text-align:center">
+  <div style="color:#90e0ef;font-size:0.6rem;font-weight:700;text-transform:uppercase">{short}</div>
+  <div style="color:white;font-size:1.1rem;font-weight:800">{flow_s} m³/s</div>
+  <div style="color:{c};font-size:0.8rem">{info['trend']}</div>
+</div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -197,9 +198,10 @@ def load_drenaje() -> dict:
 
 m = folium.Map(location=[41.72, 1.88], zoom_start=9, tiles=None)
 
+folium.TileLayer("CartoDB positron", name="🗺️ Clean", overlay=False, control=True).add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    attr="Esri", name="🛰️ Satellite", overlay=False, control=False,
+    attr="Esri", name="🛰️ Satellite", overlay=False, control=True,
 ).add_to(m)
 
 # Real river drainage network from shapefile
@@ -225,12 +227,20 @@ for s in sorted_stations:
     short     = s["name"].split(" (")[0][:15]
     is_sjd    = s["id"] == sjd["id"]
 
-    card_html = map_kpi(
-        label=f"💧 {short}",
-        value=f"{flow_str} m³/s",
-        trend=trend,
-        color=color,
-    )
+    # Slightly larger card for Sant Joan Despí
+    border_w = "3px" if is_sjd else "2px"
+    font_sz  = "16px" if is_sjd else "14px"
+
+    card_html = f"""
+    <div style="background:#0d1b2a;border:{border_w} solid {color};border-radius:8px;
+                padding:4px 8px;min-width:90px;text-align:center;white-space:nowrap;
+                box-shadow:2px 3px 10px rgba(0,0,0,0.75);font-family:sans-serif">
+      <div style="color:#90e0ef;font-size:9px;font-weight:700;text-transform:uppercase;
+                  letter-spacing:0.03em">💧 {short}</div>
+      <div style="color:white;font-size:{font_sz};font-weight:900;margin:1px 0;line-height:1">
+        {flow_str} m³/s</div>
+      <div style="color:{color};font-size:11px">{trend}</div>
+    </div>"""
 
     popup_html = f"""
     <div style="font-family:sans-serif;min-width:190px">
@@ -280,12 +290,6 @@ with tab_detail:
     if df.empty:
         st.warning(f"No cached data for **{selected_name}** ({selected_id}).")
     else:
-        # Apply station-specific flow scale correction (e.g. Balsareny sensor is 100x)
-        scale = flow_scales.get(selected_id, 1.0)
-        if scale != 1.0 and "flow_m3s" in df.columns:
-            df = df.copy()
-            df["flow_m3s"] = df["flow_m3s"] * scale
-
         if pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
             df["ts"] = df["timestamp"].dt.tz_convert("Europe/Madrid")
         else:
@@ -340,23 +344,17 @@ with tab_detail:
 
         fig.update_layout(xaxis_title="Time", yaxis_title="Flow (m³/s)",
                           yaxis=dict(range=[0, y_ceil]), hovermode="x unified",
-                          height=400, margin=dict(t=20, b=40),
-                          template="plotly_dark",
-                          paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-                          font=dict(family=FONT_MONO, color=TEXT_PRIMARY))
+                          height=400, margin=dict(t=20, b=40), template="plotly_white")
         st.plotly_chart(fig, use_container_width=True)
 
         if "level_m" in df.columns and not df["level_m"].isna().all():
             fig2 = go.Figure(go.Scatter(
                 x=df["ts"], y=df["level_m"], mode="lines", fill="tozeroy",
-                line=dict(color=C_NORMAL, width=1.8), fillcolor="rgba(36,161,72,0.12)",
+                line=dict(color="#2ca02c", width=1.8), fillcolor="rgba(44,160,44,0.12)",
                 hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.3f} m</b><extra></extra>",
             ))
             fig2.update_layout(xaxis_title="Time", yaxis_title="Stage (m)",
-                               height=280, margin=dict(t=20, b=40),
-                               template="plotly_dark",
-                               paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-                               font=dict(family=FONT_MONO, color=TEXT_PRIMARY))
+                               height=280, margin=dict(t=20, b=40), template="plotly_white")
             st.plotly_chart(fig2, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -375,10 +373,6 @@ with tab_compare:
             df_s = load_gauge_data(sid)
             if df_s.empty:
                 continue
-            s_scale = flow_scales.get(sid, 1.0)
-            if s_scale != 1.0 and "flow_m3s" in df_s.columns:
-                df_s = df_s.copy()
-                df_s["flow_m3s"] = df_s["flow_m3s"] * s_scale
             if pd.api.types.is_datetime64_any_dtype(df_s["timestamp"]):
                 df_s["ts"] = df_s["timestamp"].dt.tz_convert("Europe/Madrid")
             else:
@@ -391,13 +385,11 @@ with tab_compare:
                 hovertemplate=f"<b>{name.split('(')[0].strip()}</b><br>%{{y:.2f}} m³/s<extra></extra>",
             ))
         if flood_warn:
-            fig_c.add_hline(y=flood_warn, line_dash="dash", line_color=C_CRITICAL,
+            fig_c.add_hline(y=flood_warn, line_dash="dash", line_color=C_FLOOD,
                             annotation_text="Flood warning")
         fig_c.update_layout(xaxis_title="Time", yaxis_title="Flow (m³/s)",
                              hovermode="x unified", height=460,
-                             template="plotly_dark",
-                             paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-                             font=dict(family=FONT_MONO, color=TEXT_PRIMARY),
+                             template="plotly_white",
                              legend=dict(orientation="h", yanchor="bottom", y=1.02))
         st.plotly_chart(fig_c, use_container_width=True)
 

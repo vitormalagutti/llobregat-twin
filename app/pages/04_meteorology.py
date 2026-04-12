@@ -14,18 +14,8 @@ import yaml
 import numpy as np
 import httpx
 import json
-import sys
-
-_APP_DIR = Path(__file__).parent.parent
-if str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
-from carbon import (inject, hero, kpi_card, badge,
-                    BG, LAYER_01, LAYER_02, BORDER, TEXT_PRIMARY, TEXT_SECONDARY,
-                    BLUE_40, C_CRITICAL, C_WATCH, C_NORMAL, C_NODATA,
-                    FONT_MONO)
 
 st.set_page_config(page_title="Meteorology — Llobregat", layout="wide")
-inject()
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
@@ -65,14 +55,10 @@ def load_meteo_stations() -> list:
 
 @st.cache_data(ttl=1800)
 def load_meteo_data(station_id: str) -> pd.DataFrame:
-    """Load ALL cached parquet files for a meteo station (full history)."""
     files = sorted(CACHE_DIR.glob(f"meteo_{station_id}_*.parquet"))
     if not files:
         return pd.DataFrame()
-    dfs = [pd.read_parquet(f) for f in files]
-    df = pd.concat(dfs, ignore_index=True)
-    df = df.drop_duplicates(subset=["timestamp"])
-    return df.sort_values("timestamp").reset_index(drop=True)
+    return pd.read_parquet(files[-1])
 
 # ── AEMET 7-day forecast (live fetch, 30-min cache) ───────────────────────────
 SKY_ICONS = {
@@ -238,21 +224,16 @@ for mt in meteo_stations:
 active_stations = [m for m in meteo_stations if not np.isnan(station_latest[m["id"]]["temp"])]
 n_active = len(active_stations)
 
-# Find the hero station (first sorted = BCN/lower_llobregat priority 1)
-hero_stn = sorted_stations[0] if sorted_stations else None
-hero_info = station_latest[hero_stn["id"]] if hero_stn else {}
-hero_temp = f"{hero_info.get('temp', np.nan):.1f} °C" if not np.isnan(hero_info.get("temp", np.nan)) else "—"
-hero_precip = f"{hero_info.get('precip', np.nan):.1f} mm" if not np.isnan(hero_info.get("precip", np.nan)) else "—"
-
 # ── Hero banner ────────────────────────────────────────────────────────────────
-st.markdown(hero(
-    title="⛅ Meteorology",
-    subtitle=f"{n_active} AEMET stations active · Llobregat watershed",
-    right_label=hero_stn["name"] if hero_stn else "",
-    right_value=hero_temp,
-    right_label2="Latest precip",
-    right_value2=hero_precip,
-), unsafe_allow_html=True)
+st.markdown(f"""
+<div style="background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);
+            padding:1.4rem 2rem;border-radius:12px;margin-bottom:0.8rem">
+  <h1 style="color:white;margin:0;font-size:1.8rem">⛅ Meteorology</h1>
+  <p style="color:#90e0ef;margin:0.3rem 0 0;font-size:0.9rem">
+    {n_active} AEMET stations active · Llobregat watershed
+  </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Station KPI strip ──────────────────────────────────────────────────────────
 active_sorted = [m for m in sorted_stations
@@ -265,12 +246,14 @@ if active_sorted:
             temp_s  = f"{info['temp']:.1f} °C"  if not np.isnan(info["temp"])   else "—"
             prec_s  = f"{info['precip']:.1f} mm" if not np.isnan(info["precip"]) else "—"
             wind_s  = f"{info['wind']:.1f} m/s"  if not np.isnan(info["wind"])   else "—"
-            st.markdown(kpi_card(
-                label=f"⛅ {mt['name']}",
-                value=temp_s,
-                sub=f"💧 {prec_s}  🌬️ {wind_s}",
-                color=C_NORMAL,
-            ), unsafe_allow_html=True)
+            st.markdown(f"""
+<div style="background:#0d1b2a;border:2px solid #2ca02c;border-radius:10px;
+            padding:0.7rem;text-align:center">
+  <div style="color:#90e0ef;font-size:0.65rem;font-weight:700;text-transform:uppercase">
+    ⛅ {mt['name']}</div>
+  <div style="color:white;font-size:1.3rem;font-weight:800;margin:0.2rem 0">{temp_s}</div>
+  <div style="color:#aaa;font-size:0.7rem">💧 {prec_s} &nbsp; 🌬️ {wind_s}</div>
+</div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -334,17 +317,17 @@ else:
 
             with day_cols[i]:
                 st.markdown(f"""
-<div style="background:{LAYER_01};border-bottom:2px solid {t_color};
-            padding:10px 8px;text-align:center;font-family:'IBM Plex Mono',monospace">
-  <div style="color:{TEXT_SECONDARY};font-size:10px;font-weight:400;letter-spacing:0.32px;text-transform:uppercase">{day['weekday']}</div>
-  <div style="color:{TEXT_SECONDARY};font-size:9px">{day['date_str']}</div>
-  <div style="font-size:1.6rem;margin:0.3rem 0">{sky}</div>
-  <div style="color:{t_color};font-size:1.1rem;font-weight:400">{t_max_s}</div>
-  <div style="color:{BLUE_40};font-size:0.85rem">{t_min_s}</div>
-  <div style="color:{BLUE_40};font-size:0.7rem;margin-top:0.3rem">
+<div style="background:#0d1b2a;border:1px solid #1e3a5f;border-radius:10px;
+            padding:0.6rem;text-align:center;font-family:sans-serif">
+  <div style="color:#90e0ef;font-size:0.7rem;font-weight:700">{day['weekday']}</div>
+  <div style="color:#aaa;font-size:0.65rem">{day['date_str']}</div>
+  <div style="font-size:1.8rem;margin:0.3rem 0">{sky}</div>
+  <div style="color:{t_color};font-size:1.1rem;font-weight:800">{t_max_s}</div>
+  <div style="color:#6baed6;font-size:0.85rem">{t_min_s}</div>
+  <div style="color:#48cae4;font-size:0.7rem;margin-top:0.3rem">
     {'💧 ' + pct_s if pct_s else ''}
   </div>
-  <div style="color:{TEXT_SECONDARY};font-size:0.65rem">{prec_s}</div>
+  <div style="color:#90e0ef;font-size:0.65rem">{prec_s}</div>
 </div>""", unsafe_allow_html=True)
 
         # Temperature range chart from forecast
@@ -371,10 +354,7 @@ else:
             fig_fc.update_layout(
                 yaxis=dict(title="Temperature (°C)"),
                 yaxis2=dict(title="Precip (mm)", overlaying="y", side="right", showgrid=False),
-                height=300, margin=dict(t=20, b=40),
-                template="plotly_dark",
-                paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-                font=dict(family=FONT_MONO, color=TEXT_PRIMARY),
+                height=300, margin=dict(t=20, b=40), template="plotly_white",
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
@@ -424,10 +404,7 @@ if temp_cols and not df[temp_cols].isna().all().all():
         ))
     fig_t.update_layout(
         yaxis_title="Temperature (°C)", xaxis_title="Time",
-        height=300, margin=dict(t=20, b=40), hovermode="x unified",
-        template="plotly_dark",
-        paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-        font=dict(family=FONT_MONO, color=TEXT_PRIMARY),
+        height=300, margin=dict(t=20, b=40), hovermode="x unified", template="plotly_white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     st.plotly_chart(fig_t, use_container_width=True)
@@ -446,10 +423,7 @@ if "precip_mm" in df.columns and not df["precip_mm"].isna().all():
     fig_p.update_layout(
         yaxis=dict(title="Daily precip (mm)"),
         yaxis2=dict(title="Cumulative (mm)", overlaying="y", side="right", showgrid=False),
-        height=320, margin=dict(t=20, b=40), hovermode="x unified",
-        template="plotly_dark",
-        paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-        font=dict(family=FONT_MONO, color=TEXT_PRIMARY),
+        height=320, margin=dict(t=20, b=40), hovermode="x unified", template="plotly_white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     st.plotly_chart(fig_p, use_container_width=True)
@@ -458,11 +432,8 @@ if "precip_mm" in df.columns and not df["precip_mm"].isna().all():
 if "wind_speed_ms" in df.columns and not df["wind_speed_ms"].isna().all():
     fig_w = px.line(df, x="ts", y="wind_speed_ms",
                     labels={"ts": "Time", "wind_speed_ms": "Wind speed (m/s)"},
-                    color_discrete_sequence=[C_NORMAL])
-    fig_w.update_layout(height=250, margin=dict(t=20, b=40),
-                        template="plotly_dark",
-                        paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-                        font=dict(family=FONT_MONO, color=TEXT_PRIMARY))
+                    color_discrete_sequence=["#2ca02c"])
+    fig_w.update_layout(height=250, margin=dict(t=20, b=40))
     st.plotly_chart(fig_w, use_container_width=True)
 
 st.caption("⚠️ Historical data from cache only · Forecast: AEMET OpenData (live)")

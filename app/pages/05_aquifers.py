@@ -15,40 +15,47 @@ from pathlib import Path
 import yaml
 import numpy as np
 import json
-import sys
-
-_APP_DIR = Path(__file__).parent.parent
-if str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
-from carbon import (inject, hero, kpi_card,
-                    BG, LAYER_01, LAYER_02, BORDER, TEXT_PRIMARY, TEXT_SECONDARY,
-                    BLUE_40, C_NORMAL, C_NODATA, FONT_MONO)
 
 st.set_page_config(page_title="Aquifers — Llobregat", layout="wide")
-inject()
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 SHPS_DIR   = Path(__file__).parent.parent.parent / "shps"
 
 # ── Hero ───────────────────────────────────────────────────────────────────────
-st.markdown(hero(
-    title="🪨 Aquifer Monitoring",
-    subtitle="Baix Llobregat alluvial aquifer · Piezometric levels · Barcelona metropolitan area",
-), unsafe_allow_html=True)
+st.markdown("""
+<div style="background:linear-gradient(135deg,#3d0066,#6a0080,#9b00b3);
+            padding:1.4rem 2rem;border-radius:12px;margin-bottom:1rem">
+  <h1 style="color:white;margin:0;font-size:1.8rem">🪨 Aquifer Monitoring</h1>
+  <p style="color:#e0b3ff;margin:0.3rem 0 0;font-size:0.9rem">
+    Baix Llobregat alluvial aquifer · Piezometric levels · Barcelona metropolitan area
+  </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Context cards ──────────────────────────────────────────────────────────────
-C_PIEZO = "#a56eff"  # Purple accent for aquifer page
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.markdown(kpi_card(label="Aquifer area", value="~30 km",
-                         sub="Lower Llobregat valley length", color=C_PIEZO), unsafe_allow_html=True)
+    st.markdown("""
+<div style="background:#1a0026;border:2px solid #9b00b3;border-radius:10px;padding:1rem">
+  <div style="color:#e0b3ff;font-size:0.7rem;font-weight:700;text-transform:uppercase">Aquifer area</div>
+  <div style="color:white;font-size:1.4rem;font-weight:800">~30 km</div>
+  <div style="color:#aaa;font-size:0.8rem">Lower Llobregat valley length</div>
+</div>""", unsafe_allow_html=True)
 with col2:
-    st.markdown(kpi_card(label="Aquifer type", value="Alluvial",
-                         sub="Quaternary fluvial deposits", color=C_PIEZO), unsafe_allow_html=True)
+    st.markdown("""
+<div style="background:#1a0026;border:2px solid #9b00b3;border-radius:10px;padding:1rem">
+  <div style="color:#e0b3ff;font-size:0.7rem;font-weight:700;text-transform:uppercase">Aquifer type</div>
+  <div style="color:white;font-size:1.4rem;font-weight:800">Alluvial</div>
+  <div style="color:#aaa;font-size:0.8rem">Quaternary fluvial deposits</div>
+</div>""", unsafe_allow_html=True)
 with col3:
-    st.markdown(kpi_card(label="Key risk", value="Saltwater",
-                         sub="Seawater intrusion near delta", color=C_PIEZO), unsafe_allow_html=True)
+    st.markdown("""
+<div style="background:#1a0026;border:2px solid #9b00b3;border-radius:10px;padding:1rem">
+  <div style="color:#e0b3ff;font-size:0.7rem;font-weight:700;text-transform:uppercase">Key risk</div>
+  <div style="color:white;font-size:1.4rem;font-weight:800">Saltwater</div>
+  <div style="color:#aaa;font-size:0.8rem">Seawater intrusion near delta</div>
+</div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -86,9 +93,10 @@ def aquifer_style(feature):
     return TIPO_STYLES.get(tipo, {"fillColor": "#9b00b3", "fillOpacity": 0.15, "color": "#9b00b3", "weight": 2})
 
 m = folium.Map(location=[41.35, 2.00], zoom_start=10, tiles=None)
+folium.TileLayer("CartoDB positron", name="🗺️ Clean", overlay=False, control=True).add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    attr="Esri", name="🛰️ Satellite", overlay=False, control=False,
+    attr="Esri", name="🛰️ Satellite", overlay=False, control=True,
 ).add_to(m)
 
 # Real aquifer model from shapefile — 3 zones: modelo (purple), Aquitard (orange), Plan de BCN (blue)
@@ -209,10 +217,7 @@ if "level_masl" in df.columns and not df["level_masl"].isna().all():
         hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.2f} m a.s.l.</b><extra></extra>",
     ))
     fig.update_layout(yaxis_title="Level (m a.s.l.)", xaxis_title="Time",
-                      height=360, margin=dict(t=20, b=40),
-                      template="plotly_dark",
-                      paper_bgcolor=LAYER_01, plot_bgcolor=LAYER_02,
-                      font=dict(family=FONT_MONO, color=TEXT_PRIMARY))
+                      height=360, margin=dict(t=20, b=40), template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
 st.caption("⚠️ Data from cache only · Source: ACA piezometric network")

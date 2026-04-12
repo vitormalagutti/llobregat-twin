@@ -69,15 +69,6 @@ def refresh_gauges(meta: dict, aca_key: str | None) -> None:
         if df.empty:
             logger.warning(f"  → No data for {component_id} — skipping cache write.")
             continue
-
-        # Apply per-station flow scale correction (e.g. Balsareny raw sensor is 100× actual)
-        flow_scale = float(stn.get("flow_scale") or 1.0)
-        if flow_scale != 1.0 and "flow_m3s" in df.columns:
-            import numpy as _np
-            df = df.copy()
-            df["flow_m3s"] = df["flow_m3s"] * flow_scale
-            logger.info(f"  → Applied flow_scale={flow_scale} to {component_id}")
-
         aca.cache_to_parquet(df, prefix="flow", entity_id=component_id)
         logger.info(f"  → Cached {len(df)} rows.")
 
