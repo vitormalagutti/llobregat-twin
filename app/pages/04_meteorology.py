@@ -89,9 +89,10 @@ def fetch_forecast(municipio_code: str, api_key: str) -> tuple[list[dict], dict 
                         headers={"api_key": api_key}, timeout=20)
         if r1.status_code != 200:
             return [], {"url": url1, "http_status": r1.status_code, "estado": None,
-                        "descripcion": f"Step-1 HTTP {r1.status_code}: {r1.text[:200]}",
+                        "descripcion": f"Step-1 HTTP {r1.status_code}",
                         "exception": None}
-        j1 = r1.json()
+        # AEMET responses are ISO-8859-1 (Latin-1) — decode explicitly, not UTF-8
+        j1 = json.loads(r1.content.decode("latin-1"))
         estado = j1.get("estado")
         descripcion = j1.get("descripcion", "")
         datos_url = j1.get("datos")
@@ -103,9 +104,10 @@ def fetch_forecast(municipio_code: str, api_key: str) -> tuple[list[dict], dict 
         r2 = httpx.get(datos_url, timeout=30)
         if r2.status_code != 200:
             return [], {"url": datos_url, "http_status": r2.status_code, "estado": estado,
-                        "descripcion": f"Step-2 HTTP {r2.status_code}: {r2.text[:200]}",
+                        "descripcion": f"Step-2 HTTP {r2.status_code}",
                         "exception": None}
-        raw = r2.json()
+        # Step-2 data payload is also Latin-1
+        raw = json.loads(r2.content.decode("latin-1"))
         if not raw or not isinstance(raw, list):
             return [], {"url": datos_url, "http_status": r2.status_code, "estado": estado,
                         "descripcion": f"Unexpected step-2 payload type: {type(raw).__name__}",
