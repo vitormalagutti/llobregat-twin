@@ -74,26 +74,43 @@ SKY_ICONS = {
 }
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_forecast(municipio_code: str, api_key: str) -> list[dict]:
-    """Fetch AEMET 7-day daily forecast for a municipality. Returns list of day dicts."""
+def fetch_forecast(municipio_code: str, api_key: str) -> tuple[list[dict], dict | None]:
+    """
+    Fetch AEMET 7-day daily forecast for a municipality.
+    Returns (days, error_info) — error_info is None on success, or a dict with
+    {url, http_status, estado, descripcion, exception} on failure.
+    """
     if not api_key or not municipio_code:
-        return []
+        return [], {"url": "—", "http_status": None, "estado": None,
+                    "descripcion": "API key or municipio_code missing.", "exception": None}
+    url1 = f"{AEMET_BASE}/prediccion/especifica/municipio/diaria/{municipio_code}"
     try:
-        url1 = f"{AEMET_BASE}/prediccion/especifica/municipio/diaria/{municipio_code}"
         r1 = httpx.get(url1, params={"api_key": api_key},
                         headers={"api_key": api_key}, timeout=20)
         if r1.status_code != 200:
-            return []
+            return [], {"url": url1, "http_status": r1.status_code, "estado": None,
+                        "descripcion": f"Step-1 HTTP {r1.status_code}: {r1.text[:200]}",
+                        "exception": None}
         j1 = r1.json()
+        estado = j1.get("estado")
+        descripcion = j1.get("descripcion", "")
         datos_url = j1.get("datos")
         if not datos_url:
-            return []
+            return [], {"url": url1, "http_status": r1.status_code,
+                        "estado": estado, "descripcion": descripcion or "No 'datos' URL in response.",
+                        "exception": None}
+
         r2 = httpx.get(datos_url, timeout=30)
         if r2.status_code != 200:
-            return []
+            return [], {"url": datos_url, "http_status": r2.status_code, "estado": estado,
+                        "descripcion": f"Step-2 HTTP {r2.status_code}: {r2.text[:200]}",
+                        "exception": None}
         raw = r2.json()
         if not raw or not isinstance(raw, list):
-            return []
+            return [], {"url": datos_url, "http_status": r2.status_code, "estado": estado,
+                        "descripcion": f"Unexpected step-2 payload type: {type(raw).__name__}",
+                        "exception": None}
+
         pred = raw[0].get("prediccion", {}).get("dia", [])
         days = []
         for day in pred:
@@ -170,9 +187,11 @@ def fetch_forecast(municipio_code: str, api_key: str) -> list[dict]:
                 "wind_spd":   wind_spd,
                 "wind_dir":   wind_dir,
             })
-        return days[:7]
-    except Exception:
-        return []
+        return days[:7], None
+
+    except Exception as exc:
+        return [], {"url": url1, "http_status": None, "estado": None,
+                    "descripcion": "Exception during fetch.", "exception": str(exc)}
 
 # ── Load stations ──────────────────────────────────────────────────────────────
 meteo_stations = load_meteo_stations()
@@ -255,11 +274,21 @@ elif not municipio_code:
     st.info("Municipality code not set for this station — forecast unavailable.")
 else:
     with st.spinner("Loading forecast…"):
-        forecast_days = fetch_forecast(municipio_code, aemet_key)
+        forecast_days, forecast_err = fetch_forecast(municipio_code, aemet_key)
 
     if not forecast_days:
-        st.warning("Forecast data unavailable for this station (API may be rate-limited). "
-                   "Historical data shown below.")
+        st.warning("⚠️ Forecast data unavailable for this station.")
+        if forecast_err:
+            with st.expander("🔍 AEMET diagnostic — click to see why", expanded=True):
+                st.markdown(f"""
+| Field | Value |
+|---|---|
+| **URL** | `{forecast_err.get('url', '—')}` |
+| **HTTP status** | `{forecast_err.get('http_status', '—')}` |
+| **AEMET estado** | `{forecast_err.get('estado', '—')}` |
+| **Description** | {forecast_err.get('descripcion', '—')} |
+| **Exception** | `{forecast_err.get('exception') or 'none'}` |
+""")
     else:
         # Forecast day cards
         day_cols = st.columns(len(forecast_days))
