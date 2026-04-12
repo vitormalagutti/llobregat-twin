@@ -17,27 +17,53 @@ import plotly.express as px
 from pathlib import Path
 import yaml
 import numpy as np
+import sys
+
+_APP_DIR = Path(__file__).parent.parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+from carbon import (inject, hero, kpi_card, badge,
+                    BG, LAYER_01, LAYER_02, BORDER, TEXT_PRIMARY, TEXT_SECONDARY,
+                    BLUE_40, C_CRITICAL, C_WATCH, C_NORMAL, C_NODATA,
+                    FONT_MONO)
 
 st.set_page_config(page_title="Reservoirs — Llobregat", layout="wide")
+inject()
 
 CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "cache"
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 
-# ── Colour system ──────────────────────────────────────────────────────────────
-C_WATER   = "#0096c7"
-C_FULL    = "#27ae60"
-C_OK      = "#48cae4"
-C_WATCH   = "#e67e22"
-C_CRIT    = "#c0392b"
-C_NODATA  = "#95a5a6"
+# ── Colour system (Carbon tokens) ─────────────────────────────────────────────
+C_WATER   = BLUE_40
+C_FULL    = C_NORMAL
+C_OK      = BLUE_40
+C_CRIT    = C_CRITICAL
 
 # ── Data loaders ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def load_reservoir_data(reservoir_id: str) -> pd.DataFrame:
+    """Load ALL cached parquet files for a reservoir (full history)."""
     files = sorted(CACHE_DIR.glob(f"reservoir_{reservoir_id}_*.parquet"))
     if not files:
         return pd.DataFrame()
-    return pd.read_parquet(files[-1])
+    dfs = [pd.read_parquet(f) for f in files]
+    df = pd.concat(dfs, ignore_index=True)
+    df = df.drop_duplicates(subset=["timestamp"])
+    return df.sort_values("timestamp").reset_index(drop=True)
+
+@st.cache_data(ttl=1800)
+def load_reservoir_daily(reservoir_id: str) -> pd.DataFrame:
+    """Load all history resampled to daily means for trend charts."""
+    df = load_reservoir_data(reservoir_id)
+    if df.empty:
+        return df
+    if pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+        df["ts"] = df["timestamp"].dt.tz_convert("Europe/Madrid")
+    else:
+        df["ts"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert("Europe/Madrid")
+    numeric_cols = [c for c in ["pct_capacity", "volume_hm3", "level_m"] if c in df.columns]
+    df2 = df.set_index("ts")[numeric_cols].resample("1D").mean().reset_index()
+    return df2
 
 @st.cache_data(ttl=3600)
 def load_metadata() -> tuple[list, dict]:
@@ -83,17 +109,17 @@ sys_pct   = (total_vol / total_cap * 100) if total_cap > 0 else np.nan
 
 def pct_color(pct):
     if np.isnan(pct):      return C_NODATA
-    if pct <= PCT_CRIT:    return C_CRIT
+    if pct <= PCT_CRIT:    return C_CRITICAL
     if pct <= PCT_LOW:     return C_WATCH
-    if pct >= 80:          return C_FULL
-    return C_OK
+    if pct >= 80:          return C_NORMAL
+    return BLUE_40
 
 def pct_status(pct):
-    if np.isnan(pct):      return "⚫ No data"
-    if pct <= PCT_CRIT:    return "🔴 Critical"
-    if pct <= PCT_LOW:     return "🟠 Watch"
-    if pct >= 80:          return "🟢 Full"
-    return "🟢 Normal"
+    if np.isnan(pct):      return "No data"
+    if pct <= PCT_CRIT:    return "Critical"
+    if pct <= PCT_LOW:     return "Watch"
+    if pct >= 80:          return "Full"
+    return "Normal"
 
 # ── Hero banner ────────────────────────────────────────────────────────────────
 sys_col   = pct_color(sys_pct)
@@ -102,28 +128,14 @@ sys_pct_str = f"{sys_pct:.1f}%" if not np.isnan(sys_pct) else "—"
 total_vol_str = f"{total_vol:.1f} hm³" if total_vol else "—"
 total_cap_str = f"{total_cap:.0f} hm³" if total_cap else "—"
 
-st.markdown(f"""
-<div style="background:linear-gradient(135deg,#03045e,#0077b6);
-            padding:1.6rem 2rem;border-radius:12px;margin-bottom:1.2rem;
-            display:flex;align-items:center;justify-content:space-between">
-  <div>
-    <h1 style="color:white;margin:0;font-size:1.9rem">💧 Reservoir Storage</h1>
-    <p style="color:#90e0ef;margin:0.3rem 0 0;font-size:0.95rem">
-      {len(reservoirs)} reservoirs monitored &nbsp;·&nbsp;
-      {total_vol_str} stored of {total_cap_str} total capacity
-    </p>
-  </div>
-  <div style="text-align:right">
-    <div style="background:{sys_col};color:white;padding:0.5rem 1.2rem;
-                border-radius:20px;font-weight:700;font-size:1rem">
-      {sys_stat}
-    </div>
-    <div style="color:#90e0ef;font-size:0.85rem;margin-top:0.4rem">
-      System: <strong style="color:white;font-size:1.1rem">{sys_pct_str}</strong>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(hero(
+    title="💧 Reservoir Storage",
+    subtitle=f"{len(reservoirs)} reservoirs monitored · {total_vol_str} stored of {total_cap_str} total capacity",
+    right_label="System storage",
+    right_value=sys_pct_str,
+    status_text=sys_stat,
+    status_color=sys_col,
+), unsafe_allow_html=True)
 
 # ── System storage combined bar ────────────────────────────────────────────────
 if total_cap > 0:
@@ -162,11 +174,12 @@ if total_cap > 0:
         height=90,
         margin=dict(t=5, b=5, l=10, r=10),
         showlegend=False,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor=LAYER_02,
+        paper_bgcolor=LAYER_01,
         xaxis=dict(showgrid=False, showticklabels=False, range=[0, total_cap]),
         yaxis=dict(showgrid=False),
-        font_color="white",
+        font_color=TEXT_PRIMARY,
+        font_family=FONT_MONO,
     )
     st.plotly_chart(bar_fig, use_container_width=True)
 
@@ -220,8 +233,9 @@ for i, res in enumerate(reservoirs):
         gauge_fig.update_layout(
             height=260,
             margin=dict(t=60, b=10, l=20, r=20),
-            paper_bgcolor="rgba(0,0,0,0)",
-            font_color="white",
+            paper_bgcolor=LAYER_01,
+            font_color=TEXT_PRIMARY,
+            font_family=FONT_MONO,
         )
         st.plotly_chart(gauge_fig, use_container_width=True)
 
@@ -229,10 +243,7 @@ for i, res in enumerate(reservoirs):
         status = pct_status(pct)
         col_hex = pct_color(pct)
         st.markdown(
-            f'<div style="text-align:center;margin-top:-1rem">'
-            f'<span style="background:{col_hex};color:white;padding:3px 12px;'
-            f'border-radius:12px;font-size:0.8rem;font-weight:600">{status}</span>'
-            f'</div>',
+            f'<div style="text-align:center;margin-top:-1rem">{badge(status, col_hex)}</div>',
             unsafe_allow_html=True,
         )
 
@@ -242,72 +253,69 @@ st.divider()
 st.subheader("Storage history")
 tab_pct, tab_vol = st.tabs(["% Capacity over time", "Volume (hm³) over time"])
 
+_CHART_LAYOUT = dict(
+    template="plotly_dark",
+    paper_bgcolor=LAYER_01,
+    plot_bgcolor=LAYER_02,
+    font=dict(family=FONT_MONO, color=TEXT_PRIMARY),
+    hovermode="x unified",
+    height=440,
+    margin=dict(t=20, b=40),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+)
+
 with tab_pct:
     fig_pct = go.Figure()
 
     # Alert bands
     fig_pct.add_hrect(y0=0, y1=PCT_CRIT,
-                      fillcolor="rgba(192,57,43,0.08)", line_width=0,
-                      annotation_text="🔴 Critical zone", annotation_position="bottom left",
-                      annotation_font_color=C_CRIT)
+                      fillcolor="rgba(218,30,40,0.12)", line_width=0,
+                      annotation_text="Critical zone", annotation_position="bottom left",
+                      annotation_font_color=C_CRITICAL)
     fig_pct.add_hrect(y0=PCT_CRIT, y1=PCT_LOW,
-                      fillcolor="rgba(230,126,34,0.06)", line_width=0,
-                      annotation_text="🟠 Watch zone", annotation_position="bottom left",
+                      fillcolor="rgba(241,194,27,0.08)", line_width=0,
+                      annotation_text="Watch zone", annotation_position="bottom left",
                       annotation_font_color=C_WATCH)
     fig_pct.add_hrect(y0=80, y1=100,
-                      fillcolor="rgba(39,174,96,0.06)", line_width=0,
-                      annotation_text="🟢 Full zone", annotation_position="top left",
-                      annotation_font_color=C_FULL)
+                      fillcolor="rgba(36,161,72,0.08)", line_width=0,
+                      annotation_text="Full zone", annotation_position="top left",
+                      annotation_font_color=C_NORMAL)
 
-    colors_ts = ["#0096c7", "#48cae4", "#90e0ef"]
+    colors_ts = [BLUE_40, "#33b1ff", "#82cfff"]
     for idx, res in enumerate(reservoirs):
-        df = load_reservoir_data(res["id"])
+        df = load_reservoir_daily(res["id"])
         if df.empty or "pct_capacity" not in df.columns:
             continue
-        if pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-            df["ts"] = df["timestamp"].dt.tz_convert("Europe/Madrid")
-        else:
-            df["ts"] = pd.to_datetime(df["timestamp"])
-        df = df.sort_values("ts")
         c = colors_ts[idx % len(colors_ts)]
         fig_pct.add_trace(go.Scatter(
             x=df["ts"], y=df["pct_capacity"],
             mode="lines", name=res["name"],
-            line=dict(color=c, width=2),
-            hovertemplate=f"<b>{res['name']}</b><br>%{{x|%d %b %H:%M}}<br>%{{y:.1f}}%<extra></extra>",
+            line=dict(color=c, width=2.5),
+            hovertemplate=f"<b>{res['name']}</b><br>%{{x|%d %b}}<br>%{{y:.1f}}%<extra></extra>",
         ))
 
     # Threshold lines
     fig_pct.add_hline(y=PCT_LOW, line_dash="dot", line_color=C_WATCH,
-                      annotation_text="Watch threshold", annotation_position="top right")
-    fig_pct.add_hline(y=PCT_CRIT, line_dash="dash", line_color=C_CRIT,
-                      annotation_text="Critical threshold", annotation_position="top right")
+                      annotation_text="Watch", annotation_position="top right")
+    fig_pct.add_hline(y=PCT_CRIT, line_dash="dash", line_color=C_CRITICAL,
+                      annotation_text="Critical", annotation_position="top right")
 
     fig_pct.update_layout(
         yaxis=dict(range=[0, 100], title="% of capacity"),
-        xaxis_title="Time (Europe/Madrid)",
-        hovermode="x unified",
-        height=420,
-        margin=dict(t=20, b=40),
-        template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        xaxis_title="Date",
+        **_CHART_LAYOUT,
     )
     st.plotly_chart(fig_pct, use_container_width=True)
 
 with tab_vol:
     fig_vol = go.Figure()
-    fill_colors = ["rgba(0,150,199,0.15)", "rgba(72,202,228,0.12)", "rgba(144,224,239,0.12)"]
-    colors_v    = ["#0096c7", "#48cae4", "#90e0ef"]
+    fill_colors = ["rgba(120,169,255,0.15)", "rgba(51,177,255,0.12)", "rgba(130,207,255,0.12)"]
+    colors_v    = [BLUE_40, "#33b1ff", "#82cfff"]
 
     for idx, res in enumerate(reservoirs):
-        df = load_reservoir_data(res["id"])
+        df = load_reservoir_daily(res["id"])
         if df.empty or "volume_hm3" not in df.columns:
             continue
-        if pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-            df["ts"] = df["timestamp"].dt.tz_convert("Europe/Madrid")
-        else:
-            df["ts"] = pd.to_datetime(df["timestamp"])
-        df = df.sort_values("ts")
         cap = res.get("capacity_hm3", np.nan)
         c   = colors_v[idx % len(colors_v)]
         fc  = fill_colors[idx % len(fill_colors)]
@@ -315,10 +323,10 @@ with tab_vol:
             x=df["ts"], y=df["volume_hm3"],
             mode="lines", name=res["name"],
             fill="tozeroy",
-            line=dict(color=c, width=2),
+            line=dict(color=c, width=2.5),
             fillcolor=fc,
             hovertemplate=(
-                f"<b>{res['name']}</b><br>%{{x|%d %b %H:%M}}<br>"
+                f"<b>{res['name']}</b><br>%{{x|%d %b}}<br>"
                 f"%{{y:.1f}} hm³"
                 + (f" / {cap:.0f} hm³" if not np.isnan(cap) else "")
                 + "<extra></extra>"
@@ -333,12 +341,8 @@ with tab_vol:
 
     fig_vol.update_layout(
         yaxis_title="Volume (hm³)",
-        xaxis_title="Time (Europe/Madrid)",
-        hovermode="x unified",
-        height=420,
-        margin=dict(t=20, b=40),
-        template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        xaxis_title="Date",
+        **_CHART_LAYOUT,
     )
     st.plotly_chart(fig_vol, use_container_width=True)
 

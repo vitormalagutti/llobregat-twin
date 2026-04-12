@@ -10,6 +10,14 @@ Run locally:
 import streamlit as st
 from pathlib import Path
 from datetime import datetime, timezone
+import sys
+
+_APP_DIR = Path(__file__).parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+from carbon import (inject, hero, kpi_card,
+                    BG, LAYER_01, TEXT_PRIMARY, TEXT_SECONDARY,
+                    BLUE_40, C_NORMAL, FONT_MONO)
 
 st.set_page_config(
     page_title="Llobregat Watershed — Monitoring Dashboard",
@@ -17,6 +25,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+inject()
 
 # ── Sidebar: branding + cache freshness ───────────────────────────────────────
 with st.sidebar:
@@ -49,28 +58,34 @@ with st.sidebar:
     st.caption("⚠️ This is a monitoring dashboard, not a digital twin.")
 
 # ── Landing page content ───────────────────────────────────────────────────────
-st.title("Llobregat Watershed Monitoring Dashboard")
-st.markdown(
-    """
-    Welcome. Use the sidebar to navigate between sections:
-
-    - **Overview** — interactive watershed map and system status
-    - **Rivers** — gauge flow hydrographs and comparisons
-    - **Reservoirs** — storage levels and trends
-    - **Meteorology** — precipitation, temperature, and wind
-    - **Aquifers** — piezometric levels (Baix Llobregat)
-
-    ---
-    > This tool displays observed and recently cached data from the ACA and AEMET
-    > monitoring networks. It is **not** a simulation model. Forecasts and
-    > rainfall-runoff modelling are planned for a future phase.
-    """
-)
+st.markdown(hero(
+    title="Llobregat Watershed",
+    subtitle="Hydrological monitoring dashboard · ACA + AEMET live data",
+), unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric("Main stem length", "~170 km")
+    st.markdown(kpi_card(label="Main stem length", value="~170 km",
+                         sub="Source to Barcelona delta", color=BLUE_40), unsafe_allow_html=True)
 with col2:
-    st.metric("Mean flow (Martorell)", "~17 m³/s")
+    st.markdown(kpi_card(label="Mean flow (Martorell)", value="~17 m³/s",
+                         sub="Long-term average", color=BLUE_40), unsafe_allow_html=True)
 with col3:
-    st.metric("Watershed area", "~5,000 km²")
+    st.markdown(kpi_card(label="Watershed area", value="~5,000 km²",
+                         sub="Including Cardener & Anoia", color=BLUE_40), unsafe_allow_html=True)
+
+st.markdown(f"""
+<div style="background:{LAYER_01};padding:24px 32px;margin-top:24px;border-left:3px solid {BLUE_40}">
+  <p style="color:{TEXT_SECONDARY};font-size:14px;margin:0;line-height:1.6">
+    Use the sidebar to navigate: <strong style="color:{TEXT_PRIMARY}">Overview</strong> — watershed map ·
+    <strong style="color:{TEXT_PRIMARY}">Rivers</strong> — flow hydrographs ·
+    <strong style="color:{TEXT_PRIMARY}">Reservoirs</strong> — storage levels ·
+    <strong style="color:{TEXT_PRIMARY}">Meteorology</strong> — precipitation & temperature ·
+    <strong style="color:{TEXT_PRIMARY}">Aquifers</strong> — piezometric levels
+  </p>
+  <p style="color:{TEXT_SECONDARY};font-size:12px;margin:8px 0 0;opacity:0.7">
+    ⚠️ This displays observed and cached data from ACA and AEMET monitoring networks.
+    It is not a simulation model.
+  </p>
+</div>
+""", unsafe_allow_html=True)

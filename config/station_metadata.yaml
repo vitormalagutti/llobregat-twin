@@ -34,7 +34,8 @@ gauge_stations:
     priority: 1
     level_sensor: "080180-005-ANA001"
     flow_sensor: "CALC001229"
-    notes: "Mid-upper Llobregat, between La Baells and Manresa confluence area."
+    flow_scale: 0.01
+    notes: "Raw sensor values are 100× too high — flow_scale corrects to m³/s."
 
   - id: "080538-005"
     component_id: "080538-005"
@@ -209,17 +210,34 @@ reservoirs:
     notes: "Upper Cardener reservoir. Not in original spec but active — added from catalogue."
 
 # ── AEMET meteorological stations ─────────────────────────────────────────────
-# IDs to be verified on first refresh. If a station returns no data, check
-# the discovered_aemet_stations.csv (run discover_stations.py) for alternatives.
+# IDs verified against AEMET OpenData inventory.
+# municipio_code = INE municipality code used by AEMET forecast API.
 meteo_stations:
 
-  - id: "0076"
-    name: "Berga"
-    sub_basin: "upper_llobregat"
-    lat: 42.1000
-    lon: 1.8500
+  - id: "0201D"
+    name: "Barcelona (El Prat)"
+    sub_basin: "lower_llobregat"
+    lat: 41.2971
+    lon: 2.0785
     priority: 1
     municipio_code: "08019"
+    notes: "Barcelona El Prat airport AEMET station. Hero station for lower basin."
+
+  - id: "0229I"
+    name: "Molins de Rei"
+    sub_basin: "lower_llobregat"
+    lat: 41.4100
+    lon: 2.0200
+    priority: 2
+    municipio_code: "08124"
+
+  - id: "0200E"
+    name: "Martorell"
+    sub_basin: "lower_llobregat"
+    lat: 41.4700
+    lon: 1.9300
+    priority: 2
+    municipio_code: "08116"
 
   - id: "0149X"
     name: "Manresa"
@@ -229,21 +247,13 @@ meteo_stations:
     priority: 1
     municipio_code: "08113"
 
-  - id: "0200E"
-    name: "Martorell"
-    sub_basin: "lower_llobregat"
-    lat: 41.4700
-    lon: 1.9300
+  - id: "0076"
+    name: "Berga"
+    sub_basin: "upper_llobregat"
+    lat: 42.1000
+    lon: 1.8500
     priority: 1
-    municipio_code: "08116"
-
-  - id: "0229I"
-    name: "Molins de Rei"
-    sub_basin: "lower_llobregat"
-    lat: 41.4100
-    lon: 2.0200
-    priority: 2
-    municipio_code: "08124"
+    municipio_code: "08022"
 
 # ── ACA piezometric stations ──────────────────────────────────────────────────
 # To be populated. Run: python -m data.fetchers.discover_stations
